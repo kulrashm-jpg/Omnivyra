@@ -30,7 +30,13 @@ export const MAX_RECORDING_MS = 5 * 60 * 1000;
 
 /** A readable message for a failed transcription response. */
 export function transcriptionErrorMessage(status: number, serverError?: string | null): string {
-  if (status === 413) return 'That recording was too long to send. Keep voice notes under 5 minutes, or split them.';
+  // 55 (2026-11-14): under billing enforcement a too-long recording is charged for the time
+  // processed, and the 413's `error` says so ("... You were charged C credits ..."). Show that
+  // readable sentence as-is; fall back to our own only when it is missing or a bare code.
+  if (status === 413) {
+    const readable = serverError && serverError.trim() && !/^[A-Z0-9_]+$/.test(serverError.trim()) ? serverError.trim() : '';
+    return readable || 'That recording was too long to send. Keep voice notes under 5 minutes, or split them.';
+  }
   if (status === 401) return 'Your session expired — sign in again to use voice.';
   if (status === 429) return serverError || 'Too many voice notes in a short time. Wait a moment and try again.';
   if (serverError) return serverError;
