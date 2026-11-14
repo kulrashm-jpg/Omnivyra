@@ -1,3 +1,4 @@
+import { TENANT_SOURCE_COLUMNS, PLATFORM_ADMIN_SOURCE_COLUMNS } from '../../../backend/services/externalApi/sourceColumns';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -103,9 +104,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const platformScopeGranted = platformScopeRequested && hasPlatformScope;
 
   if (req.method === 'GET') {
+    // EXPLICIT columns (e9 2026-11-14): never the encrypted OAuth pair; tenants get no headers / query params / key names.
     let query = supabase
       .from('external_api_sources')
-      .select('*')
+      .select(platformScopeGranted ? PLATFORM_ADMIN_SOURCE_COLUMNS : TENANT_SOURCE_COLUMNS)
       .eq('id', id);
     if (!platformScopeGranted) {
       query = query.eq('company_id', companyId);
@@ -305,7 +307,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!platformScopeGranted) {
       updateQuery = updateQuery.eq('company_id', companyId);
     }
-    const { data, error } = await updateQuery.select('*').single();
+    const { data, error } = await updateQuery.select(platformScopeGranted ? PLATFORM_ADMIN_SOURCE_COLUMNS : TENANT_SOURCE_COLUMNS).single();
 
     if (error) {
       return res.status(500).json({

@@ -1,3 +1,4 @@
+import { TENANT_PRESET_TEMPLATE_COLUMNS, PLATFORM_ADMIN_SOURCE_COLUMNS } from '../../../backend/services/externalApi/sourceColumns';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -100,7 +101,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const baseQuery = () =>
         supabase
           .from('external_api_sources')
-          .select('*')
+          .select(PLATFORM_ADMIN_SOURCE_COLUMNS)
           .eq('is_preset', true)
           .order('created_at', { ascending: true });
       const scopedResult = await baseQuery().is('company_id', null);
@@ -209,10 +210,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       hiddenIds = new Set((hiddenResult.data || []).map((row) => row.api_source_id));
     }
 
+    // TENANT branch (e9 2026-11-14): PLATFORM presets only (company_id IS NULL - another tenant's own source marked
+    // is_preset must never be listed to this company), through an explicit template column list.
     const { data, error } = await supabase
       .from('external_api_sources')
-      .select('*')
+      .select(TENANT_PRESET_TEMPLATE_COLUMNS)
       .eq('is_preset', true)
+      .is('company_id', null)
       .order('created_at', { ascending: true });
 
     if (error) {
@@ -232,7 +236,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       headers: (preset.headers || {}) as Record<string, string>,
       query_params: (preset.query_params || {}) as Record<string, string | number>,
       auth_type: preset.auth_type || 'none',
-      api_key_env_name: preset.api_key_env_name || preset.api_key_name || null,
+      // The platform's key-variable NAME is not a tenant's business (e9): a tenant supplies its own credentials.
+      api_key_env_name: null,
       example_response_type: 'json',
       is_preset: true,
     }));
