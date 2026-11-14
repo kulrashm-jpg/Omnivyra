@@ -13,13 +13,13 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { loadAuthorizedPlanRow } from '@/backend/services/creator/rendering/authorizedPlanRow';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 import {
   isCreatorRenderingEnabled, isCreatorRenderQueueEnabled,
   cancelRenderJob, processQueuedRenderJob, createRenderProviderRegistry,
 } from '@/backend/services/creator/rendering';
-import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -32,25 +32,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'daily_content_plans id required' });
 
-  const { data: row } = await supabase
-    .from('daily_content_plans')
-    .select('id, campaign_id, content, intent_type, organization_id')
-    .eq('id', id).maybeSingle();
-  if (!row) return res.status(404).json({ error: `Row not found: ${id}` });
+  // Authenticate and authorize BEFORE disclosing anything about the row (no existence oracle):
+  // unknown, unresolvable and foreign plan ids all answer the same 404 (authorizedPlanRow.ts).
+  // The intent_type check runs only for an authorized caller.
+  const authorized = await loadAuthorizedPlanRow(req, res, id, 'id, campaign_id, content, intent_type, organization_id');
+  if (!authorized) return;
+  const { row, companyId, access } = authorized;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String((access as any)?.userId) }))) return;
   if ((row as any).intent_type !== 'creator') {
     return res.status(409).json({ error: 'Not a Creator row.', code: 'NOT_A_CREATOR_ROW' });
   }
-  let companyId: string | null = null;
-  try {
-    const { data: c } = await supabase.from('campaigns').select('company_id')
-      .eq('id', (row as any).campaign_id).maybeSingle();
-    companyId = (c as any)?.company_id ?? null;
-  } catch { /* noop */ }
-  if (!companyId) return res.status(403).json({ error: 'Company unresolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
-  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
-  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   let content: any = {};
   try { content = typeof (row as any).content === 'string' ? JSON.parse((row as any).content) : ((row as any).content || {}); } catch { content = {}; }

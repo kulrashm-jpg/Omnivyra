@@ -20,7 +20,8 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { loadAuthorizedPlanRow } from '@/backend/services/creator/rendering/authorizedPlanRow';
+import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
 import { ownedDbTable } from '@/backend/db/writeOwner';
 import { loadCreatorWorkspace } from '@/backend/services/creator/intelligence/workspace';
 import {
@@ -31,11 +32,8 @@ import {
   enqueueRenderJob,
   projectRenderRequest,
   RenderProjectionError,
-  evaluateRenderGovernance,
-  coerceGovernanceRow,
-  GLOBAL_GOVERNANCE_SENTINEL,
 } from '@/backend/services/creator/rendering';
-import { enforceCampaignWriteRole } from '../../../../backend/services/campaignWriteRole';
+import { evaluateRenderGovernanceGate } from '@/backend/services/creator/rendering/governance/renderGovernanceGate';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -48,28 +46,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'daily_content_plans id required' });
 
-  const { data: row, error: rErr } = await supabase
-    .from('daily_content_plans')
-    .select('id, campaign_id, content, content_type, platform, intent_type, organization_id')
-    .eq('id', id).maybeSingle();
-  if (rErr) return res.status(500).json({ error: 'load failed' });
-  if (!row) return res.status(404).json({ error: `Row not found: ${id}` });
+  // Authenticate and authorize BEFORE disclosing anything about the row (no existence oracle):
+  // unknown, unresolvable and foreign plan ids all answer the same 404 (authorizedPlanRow.ts).
+  // The intent_type check runs only for an authorized caller.
+  const authorized = await loadAuthorizedPlanRow(req, res, id,
+    'id, campaign_id, content, content_type, platform, intent_type, organization_id');
+  if (!authorized) return;
+  const { row, companyId, access } = authorized;
+  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
+  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String((access as any)?.userId) }))) return;
   if ((row as any).intent_type !== 'creator') {
     return res.status(409).json({ error: 'Not a Creator row.', code: 'NOT_A_CREATOR_ROW' });
   }
-
-  // Auth via campaign company.
-  let companyId: string | null = null;
-  try {
-    const { data: c } = await supabase.from('campaigns').select('company_id')
-      .eq('id', (row as any).campaign_id).maybeSingle();
-    companyId = (c as any)?.company_id ?? null;
-  } catch { /* noop */ }
-  if (!companyId) return res.status(403).json({ error: 'Company unresolved.' });
-  const access = await enforceCompanyAccess({ req, res, companyId });
-  if (!access) return;
-  // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
-  if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String(access.userId) }))) return;
 
   const loaded = loadCreatorWorkspace(row as any, { now: new Date().toISOString() });
   if (!loaded.ok) {
@@ -91,35 +79,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── Step-R6: enterprise governance gate (fail-closed, pre-enqueue) ────
   // Evaluated OUTSIDE R3/R4/R5 cores. Blocks before any billing/lineage.
-  try {
-    const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-    const [{ data: orgGovRow }, { data: globalGovRow }, { data: dailyJobs }] = await Promise.all([
-      supabase.from('creator_render_governance_state').select('*').eq('organization_id', orgId).maybeSingle(),
-      supabase.from('creator_render_governance_state').select('*').eq('organization_id', GLOBAL_GOVERNANCE_SENTINEL).maybeSingle(),
-      supabase.from('creator_render_job').select('id').eq('organization_id', orgId).gte('created_at', since).limit(1000),
-    ]);
-    const { data: activeStates } = await supabase
-      .from('creator_render_job_state').select('current_state')
-      .in('current_state', ['queued', 'rendering', 'processing', 'moderation']).limit(1000);
-    const decision = evaluateRenderGovernance(
-      orgGovRow ? coerceGovernanceRow(orgGovRow, orgId) : null,
-      globalGovRow ? coerceGovernanceRow(globalGovRow, GLOBAL_GOVERNANCE_SENTINEL) : null,
-      {
-        provider: 'openai', assetFamily: 'image',
-        dailyRenderCount: Array.isArray(dailyJobs) ? dailyJobs.length : 0,
-        concurrentRenderCount: Array.isArray(activeStates) ? activeStates.length : 0,
-      },
-    );
-    if (!decision.allowed) {
-      return res.status(429).json({
-        render: { ok: false, status: 'governance_blocked', reason: decision.reason, event: decision.event },
+  // Every read is CHECKED (renderGovernanceGate.ts): an unreadable kill switch or count refuses the
+  // render instead of being read as "no governance" / zero.
+  {
+    const gate = await evaluateRenderGovernanceGate(supabase, orgId, { provider: 'openai', assetFamily: 'image' });
+    if (gate.ok === false) {
+      console.error('[render-image] governance could not be evaluated; render refused', { organization_id: orgId, detail: gate.detail });
+      return res.status(503).json({
+        render: { ok: false, status: 'governance_blocked', reason: 'governance_unavailable' },
       });
     }
-  } catch {
-    // Fail-closed: if governance cannot be evaluated, do NOT render.
-    return res.status(503).json({
-      render: { ok: false, status: 'governance_blocked', reason: 'governance_unavailable' },
-    });
+    if (!gate.decision.allowed) {
+      return res.status(429).json({
+        render: { ok: false, status: 'governance_blocked', reason: gate.decision.reason, event: gate.decision.event },
+      });
+    }
   }
 
   // ── Step-R4: ASYNC path when the queue flag is ON ─────────────────────
@@ -153,14 +127,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }).select('id').single();
         jobId = job?.id;
         if (!jobId) return res.status(500).json({ render: { ok: false, status: 'failed', reason: 'job_insert_failed' } });
+        // A missing state row is adopted by the worker (processQueuedRenderJob), so this write is not fatal.
         await ownedDbTable('creator_render_job_state').insert({
           render_job_id: jobId, current_state: 'queued', last_transition_at: nowIso(),
         });
-        await ownedDbTable('billing_operations').insert({
-          correlation_id: contentCoreId, module: 'creator_render', action: 'render_image',
-          organization_id: orgId, idempotency_key: `render:${jobId}`,
-          amount_estimated: 5, status: 'held', metadata: { provider: chain[0], async: true },
-        });
+        // NO job-level billing hold here (05 / e9, 2026-11-11). The worker creates a hold PER ATTEMPT
+        // (`render:<jobId>:a<N>`, the sync path's model) and confirms or releases it by its own id. The
+        // old single `render:<jobId>` hold, inserted here with its error discarded and a hard-coded
+        // estimate of 5, was re-used by every attempt (held -> released -> confirmed: two paid calls, one
+        // charge) and could be "confirmed" when it did not exist.
       }
       const enq = await enqueueRenderJob(
         { supabase, ownedDbTable, now: nowIso },
