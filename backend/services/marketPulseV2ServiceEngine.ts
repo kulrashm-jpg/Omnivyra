@@ -44,6 +44,7 @@ import {
 } from './marketPulseProductionHardeningService';
 
 import { type MarketPulseProfileSettings, type MarketPulseObjective, type MarketPulseRunInput, type LegacyConsolidatedResult, normalizeStringArray, slugify, createMarketPulseRun, sourceCount, getMarketPulseRun, mapLegacyCategory, buildImpactType, insertMarketPulseFindingWithSchemaFallback } from './marketPulseV2ServiceModel';
+import { isMarketPulseAutomationEnabled, MarketPulseAutomationDisabledError } from './marketPulse/automationGate';
 
 function buildWhyItMatters(
   title: string,
@@ -862,6 +863,9 @@ export async function getMarketPulseHistory(companyId: string) {
 }
 
 export async function upsertAutomationSettings(companyId: string, payload: Record<string, unknown>) {
+  // e9/05 2026-11-14: ENROLMENT is an (indirect) producer of automated runs - the writer itself enforces the gate, so a
+  // caller that forgets to check cannot enrol a company while automated Market Pulse is off. Disabling stays allowed.
+  if (payload.is_active === true && !isMarketPulseAutomationEnabled()) throw new MarketPulseAutomationDisabledError();
   const { data, error } = await ownedDbTable('market_pulse_automation_settings')
     .upsert({
       company_id: companyId,

@@ -17,3 +17,11 @@ export const MARKET_PULSE_AUTOMATION_DISABLED = {
 export function isMarketPulseAutomationEnabled(): boolean {
   return process.env[MARKET_PULSE_AUTOMATION_ENV] === 'true';
 }
+
+/** Thrown by the settings WRITER itself (upsertAutomationSettings) when enrolment is attempted while the gate is off:
+ *  the structural backstop for any caller that does not check the gate first (05: indirect producers). */
+export class MarketPulseAutomationDisabledError extends Error {
+  readonly code = MARKET_PULSE_AUTOMATION_DISABLED.code;
+  readonly retryable = false;
+  constructor() { super(MARKET_PULSE_AUTOMATION_DISABLED.error); this.name = 'MarketPulseAutomationDisabledError'; }
+}

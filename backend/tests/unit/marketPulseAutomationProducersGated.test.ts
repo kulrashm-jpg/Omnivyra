@@ -98,30 +98,54 @@ describe('POST /api/market-pulse/automation', () => {
   });
 });
 
-describe('one gate: every automated-work producer imports it (static)', () => {
-  const ROOT = path.join(process.cwd(), 'pages', 'api');
+describe('closed set over the two Market Pulse tables (05: scan the TABLE, not a list of function spellings)', () => {
+  // Every file that names the enrolment table (market_pulse_automation_settings) or the run table
+  // (market_pulse_jobs_v1) is a potential producer - direct (runs) or indirect (enrols). The set is pinned: a NEW file
+  // naming either table fails here until it is reviewed and, if it produces automated work, routed through the gate.
+  const REVIEWED: Record<string, string> = {
+    'backend/queue/jobQueue.ts': 'queue typing only',
+    'backend/services/marketPulse/executorContext.ts': 'doc comment only',
+    'backend/services/marketPulseJobProcessor.ts': 'processes an existing job (no enrolment, no new run)',
+    'backend/services/marketPulseV2ServiceEngine.ts': 'THE settings writer - upsertAutomationSettings enforces the gate',
+    'backend/services/operationsCenterService.ts': 'count reader',
+    'pages/api/cron/market-pulse-automation.ts': 'automated producer - gated',
+    'pages/api/market-pulse/job/[id].ts': 'reader',
+    'pages/api/market-pulse/job/[id]/cancel.ts': 'cancel (status write only)',
+    'pages/api/market-pulse/job/create.ts': 'ONE-TIME producer (legacy) - unbilled, with e9/owner; not automated',
+    'pages/api/market-pulse/run.ts': "producer - mode 'automated' gated, one_time with e9/owner",
+    'pages/api/market-pulse/runs/[id]/cancel.ts': 'cancel (status write only)',
+    'pages/api/market-pulse/runs/[id]/index.ts': 'reader; local-only stale-job recovery of an existing job',
+  };
   const files: string[] = [];
   const walk = (d: string) => {
+    if (!fs.existsSync(d)) return;
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (['node_modules', '.next', 'tests'].includes(e.name)) continue;
       const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p); else if (/\.tsx?$/.test(e.name)) files.push(p);
+      if (e.isDirectory()) walk(p); else if (/\.(ts|tsx|js)$/.test(e.name)) files.push(p);
     }
   };
-  walk(ROOT);
-  const PRODUCER = /upsertAutomationSettings\(|mode:\s*'automated'|=== 'automated'/;
+  for (const d of ['backend', 'pages', 'lib', 'shared', 'components', 'hooks', 'scripts']) walk(path.join(process.cwd(), d));
+  const naming = files
+    .filter((f) => /market_pulse_automation_settings|market_pulse_jobs_v1/.test(fs.readFileSync(f, 'utf8')))
+    .map((f) => path.relative(process.cwd(), f).split(path.sep).join('/'))
+    .sort();
 
-  test('positive control: the scan finds the three known producers', () => {
-    const producers = files.filter((f) => PRODUCER.test(fs.readFileSync(f, 'utf8'))).map((f) => path.relative(process.cwd(), f).replace(/\\/g, '/'));
-    expect(producers).toEqual(expect.arrayContaining([
-      'pages/api/cron/market-pulse-automation.ts', 'pages/api/market-pulse/run.ts', 'pages/api/market-pulse/automation.ts',
+  test('positive control: the scan finds the known producers and the writer', () => {
+    expect(naming).toEqual(expect.arrayContaining([
+      'pages/api/cron/market-pulse-automation.ts', 'pages/api/market-pulse/run.ts',
+      'backend/services/marketPulseV2ServiceEngine.ts',
     ]));
   });
 
-  test('each producer imports isMarketPulseAutomationEnabled from the shared gate', () => {
-    const ungated = files
-      .filter((f) => PRODUCER.test(fs.readFileSync(f, 'utf8')))
-      .filter((f) => !/import \{[^}]*isMarketPulseAutomationEnabled[^}]*\} from '[./]*backend\/services\/marketPulse\/automationGate'/.test(fs.readFileSync(f, 'utf8')))
-      .map((f) => path.relative(process.cwd(), f));
-    expect(ungated).toEqual([]);
+  test('every file naming either table is in the reviewed set (a new one must be reviewed and gated)', () => {
+    expect(naming).toEqual(Object.keys(REVIEWED).sort());
+  });
+
+  test('the gated producers and the writer import the shared gate', () => {
+    for (const f of ['pages/api/cron/market-pulse-automation.ts', 'pages/api/market-pulse/run.ts',
+      'pages/api/market-pulse/automation.ts', 'backend/services/marketPulseV2ServiceEngine.ts']) {
+      expect([f, /isMarketPulseAutomationEnabled/.test(fs.readFileSync(path.join(process.cwd(), f), 'utf8'))]).toEqual([f, true]);
+    }
   });
 });
