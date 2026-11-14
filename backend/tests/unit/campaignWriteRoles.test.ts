@@ -115,6 +115,8 @@ describe('requireCampaignAccess: real role, read kept, write refused for view-on
 describe('voice/transcribe (e9 2026-11-13): Viewer 403, Engager + Creator allowed', () => {
   // The AI guard is stubbed to stop at a sentinel: reaching it proves the caller passed the role gate, and no
   // provider is ever called.
+  beforeAll(() => { process.env.VOICE_TRANSCRIBE_ENABLED = 'true'; }); // the role matrix tests the ON path
+  afterAll(() => { delete process.env.VOICE_TRANSCRIBE_ENABLED; });
   beforeEach(() => {
     const { AiGuardError } = jest.requireActual('../../services/ai/aiRequestGuard');
     mockGuardAiRequest.mockImplementation(async () => { throw new AiGuardError('GUARD_SENTINEL', 'sentinel', 429); });

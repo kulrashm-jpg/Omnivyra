@@ -57,3 +57,16 @@ export class AudioTooLongError extends Error {
     this.name = 'AudioTooLongError';
   }
 }
+
+/**
+ * VOICE KILL-SWITCH (e9 2026-11-14, BLOCKING - money): voice must not go live free. Transcription runs only when
+ * VOICE_TRANSCRIBE_ENABLED === 'true' (default OFF); it is switched on together with the pricing release (049:
+ * voice_per_minute at 14 credits/min). The UI shows the mic only when GET /api/voice/status says enabled.
+ */
+export function isVoiceTranscribeEnabled(): boolean {
+  return String(process.env.VOICE_TRANSCRIBE_ENABLED ?? '').trim().toLowerCase() === 'true';
+}
+export const VOICE_UNAVAILABLE_BODY = Object.freeze({
+  error: 'Voice input is not available yet.',
+  code: 'VOICE_UNAVAILABLE',
+});

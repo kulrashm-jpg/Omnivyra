@@ -70,8 +70,8 @@ const mockFetch = jest.fn(async (..._a: any[]) => ({
   json: async () => ({ text: 'we should post on linkedin', duration: 30, language: 'en' }),
   text: async () => '',
 }));
-beforeAll(() => { global.fetch = mockFetch as never; process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-only'; });
-afterAll(() => { global.fetch = realFetch; });
+beforeAll(() => { global.fetch = mockFetch as never; process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-only'; process.env.VOICE_TRANSCRIBE_ENABLED = 'true'; });
+afterAll(() => { global.fetch = realFetch; delete process.env.VOICE_TRANSCRIBE_ENABLED; });
 
 const NOTES = [
   { id: 'note-a', text: 'A note', context: 'campaign', campaign_id: CAMPAIGN_A, created_at: '2026-01-02' },
@@ -161,6 +161,29 @@ describe('voice/transcribe', () => {
       whisperSays(400);
       const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
       expect(r).toMatchObject({ status: 413, body: { code: 'AUDIO_TOO_LONG' } });
+    });
+  });
+  describe('voice kill-switch (e9 2026-11-14, BLOCKING - money): off until voice is priced', () => {
+    afterEach(() => { process.env.VOICE_TRANSCRIBE_ENABLED = 'true'; });
+    it.each([undefined, '', 'false', 'TRUE '])('VOICE_TRANSCRIBE_ENABLED=%p (off) -> 503 VOICE_UNAVAILABLE, no guard / provider / cost', async (v) => {
+      if (v === undefined) delete process.env.VOICE_TRANSCRIBE_ENABLED; else process.env.VOICE_TRANSCRIBE_ENABLED = v;
+      const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
+      if (v === 'TRUE ') { expect(r.status).toBe(200); return; } // trimmed + case-insensitive 'true' is ON (control)
+      expect(r).toMatchObject({ status: 503, body: { code: 'VOICE_UNAVAILABLE' } });
+      noSpend();
+    });
+    it('auth still answers first when off: unauthenticated -> 401', async () => {
+      delete process.env.VOICE_TRANSCRIBE_ENABLED;
+      expect((await invoke(transcribe, { method: 'POST', as: null, body: { ...audio, companyId: CO_A } })).status).toBe(401);
+    });
+    it('GET /api/voice/status reports the switch; unauthenticated -> 401', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const status = require('../../../pages/api/voice/status').default;
+      delete process.env.VOICE_TRANSCRIBE_ENABLED;
+      expect(await invoke(status, { method: 'GET', as: 'A' })).toMatchObject({ status: 200, body: { enabled: false } });
+      process.env.VOICE_TRANSCRIBE_ENABLED = 'true';
+      expect(await invoke(status, { method: 'GET', as: 'A' })).toMatchObject({ status: 200, body: { enabled: true } });
+      expect((await invoke(status, { method: 'GET', as: null })).status).toBe(401);
     });
   });
   it('signed-in without a company → 400 COMPANY_REQUIRED, no spend (was 200 and ungated)', async () => {

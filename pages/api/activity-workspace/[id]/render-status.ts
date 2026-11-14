@@ -38,6 +38,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const authorized = await loadAuthorizedPlanRow(req, res, id, 'id, campaign_id, content, intent_type, organization_id');
   if (!authorized) return;
   const { row, companyId, access } = authorized;
+  // companyId here is DESTRUCTURED FROM THE AUTHORIZATION RESULT (the plan row's owner), never read from the request:
+  // the write role is therefore always checked against the owner of the resource just authorized (05). Do not
+  // "simplify" it to a request value - that would let a role in one company authorize a write on another's row.
   // Campaign WRITE role guard (2026-11-13): membership alone may not mutate campaign data (view-only -> 403).
   if (!(await enforceCampaignWriteRole({ req, res, companyId: String(companyId), userId: String((access as any)?.userId) }))) return;
   if ((row as any).intent_type !== 'creator') {

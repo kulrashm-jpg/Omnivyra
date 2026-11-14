@@ -21,6 +21,8 @@ import {
   creditsForSeconds,
   exceedsDurationLimit,
   exceedsPreCallSizeBound,
+  isVoiceTranscribeEnabled,
+  VOICE_UNAVAILABLE_BODY,
 } from '../../../backend/services/voice/transcriptionLimits';
 
 // SEC91-D9: every transcription-provider request is time-bounded (they had no
@@ -57,6 +59,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Campaign WRITE role guard (2026-11-13): Viewer / view-only -> 403; Engager allowed (voice_notes); creator-and-up.
   if (!(await enforceCampaignWriteRole({ req, res, companyId: String(voiceOrgId), userId: String(ctx.userId), engagerException: 'voice_notes' }))) return;
   const callerUserId: string = ctx.userId;
+
+  // KILL-SWITCH (e9, BLOCKING - money): no transcription - so no provider spend - until voice is priced. Checked after
+  // auth and the role gate (so those answers are unchanged) and before any guard, hold or provider call.
+  if (!isVoiceTranscribeEnabled()) {
+    return res.status(503).json(VOICE_UNAVAILABLE_BODY);
+  }
 
   try {
     const { audioFile, provider = 'whisper', context = 'campaign-planning' } = req.body;
