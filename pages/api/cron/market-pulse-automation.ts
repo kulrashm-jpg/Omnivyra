@@ -96,6 +96,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
+  // e9 BLOCKING-NOW 2026-11-14 (owner ruling: automated Market Pulse scans stay OFF until charging is live). The
+  // automated run makes AI calls and bills nothing, so it is default-OFF: only MARKET_PULSE_AUTOMATION_ENABLED === 'true'
+  // runs it. Checked after auth and BEFORE any read, queue or AI call. Re-enable together with the hold-then-settle
+  // billing release (8 credits per region, weekly default cadence).
+  if (process.env.MARKET_PULSE_AUTOMATION_ENABLED !== 'true') {
+    console.log('[cron/market-pulse-automation] disabled (MARKET_PULSE_AUTOMATION_ENABLED is not "true"); no work done');
+    return res.status(200).json({ ok: true, skipped: 'automation_disabled' });
+  }
+
   const startedAt = Date.now();
   const dayBucket = new Date().toISOString().slice(0, 10);
 
