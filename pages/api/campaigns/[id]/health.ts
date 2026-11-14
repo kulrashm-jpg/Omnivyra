@@ -7,12 +7,27 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { ownerCompanyOfRow, tenantTable, tenantContextFor, TenantSeamError, type TenantContext } from '../../../../backend/db/tenantTable';
-import { seamDenial } from '../../../../backend/db/seamDenial';
+import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { evaluateAndPersistCampaignHealth } from '../../../../backend/jobs/campaignHealthEvaluationJob';
 
 const HEALTH_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function getCompanyId(campaignId: string): Promise<string | null> {
+  const { data: ver } = await supabase
+    .from('campaign_versions')
+    .select('company_id')
+    .eq('campaign_id', campaignId)
+    .limit(1)
+    .maybeSingle();
+  if (ver?.company_id) return ver.company_id as string;
+  const { data: camp } = await supabase
+    .from('campaigns')
+    .select('company_id')
+    .eq('id', campaignId)
+    .maybeSingle();
+  return camp?.company_id ? (camp.company_id as string) : null;
+}
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -27,14 +42,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = id;
 
   try {
-    // S2 derive-then-authorize (e9 ruling, as campaigns/[id]/source-recommendation): ownerCompanyOfRow answers ONLY
-    // which company owns the campaign (campaigns.company_id, NOT NULL since 20270217000025), no longer "any
-    // campaign_versions row" (an unordered .limit(1) read). SOURCE-OF-TRUTH MOVE: versions -> campaigns; C36: 0
-    // mismatches in prod. The ?companyId= fallback for a campaign with no owner is unchanged, and the access check
-    // still binds the campaign to whichever company it authorizes (checkCampaignOwnership).
-    const ownerCompanyId = await ownerCompanyOfRow('campaigns', campaignId, 'campaign health: owner of the campaign');
-    const queryCompanyId = typeof req.query.companyId === 'string' ? req.query.companyId : null;
-    const companyId = ownerCompanyId ?? queryCompanyId;
+    const companyId =
+      (await getCompanyId(campaignId)) ??
+      (typeof req.query.companyId === 'string' ? req.query.companyId : null);
     if (!companyId) {
       return res.status(400).json({ error: 'Campaign must be linked to a company' });
     }
@@ -42,28 +52,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await enforceCompanyAccess({
       req,
       res,
-      companyId: ownerCompanyId ?? queryCompanyId,
+      companyId,
       campaignId,
       requireCampaignId: false,
     });
     if (!access) return;
 
-    // S2 tenant seam: the tenant is the company enforceCompanyAccess just authorized for access.userId. A company
-    // that cannot form a context gets the route's existing no-report 404.
-    let tenant: TenantContext;
-    try {
-      tenant = tenantContextFor(access, companyId);
-    } catch (err) {
-      if (err instanceof TenantSeamError) {
-        return seamDenial(res, err, 404, {
-          error: 'No health report',
-          message: 'No persisted report_json. Save or update the campaign plan to generate one.',
-        });
-      }
-      throw err;
-    }
-
-    const { data: row, error } = await tenantTable('campaign_health_reports', tenant)
+    const { data: row, error } = await supabase
+      .from('campaign_health_reports')
       .select('report_json, evaluated_at, created_at')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })

@@ -225,8 +225,8 @@
     },
     "pages/api/campaigns/[id]/continuity.ts": {
       "kind": "inline-binding",
-      "reason": "S2 tier 2 (55, 2026-11-14): the campaign's own company is derived inside the seam (ownerCompanyOfRow('campaigns')) and immediately authorized with enforceRole; every later read goes through tenantTable.",
-      "evidence": "ownerCompanyOfRow\\('campaigns', id,[\\s\\S]*?enforceRole\\("
+      "reason": "Company derived from campaign_versions; enforceRole on that company before reads/update.",
+      "evidence": "from\\('campaign_versions'\\)[\\s\\S]*?enforceRole\\("
     },
     "pages/api/campaigns/[id]/forecast-vs-actual.ts": {
       "kind": "inline-binding",

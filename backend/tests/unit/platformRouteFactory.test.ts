@@ -9,6 +9,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRoute, classifyError } from '../../../lib/platform/routeFactory';
 import { getRequestId, getTraceId, hasRequestMemoScope } from '../../../lib/platform/requestContext';
 import { registry } from '../../../backend/observability/registry';
+// 05 (2026-11-14): the route factory DUCK-TYPES the seam error (lib/ may not import backend/). The test pins that
+// contract against the REAL producer, so a rename of name/retryable/code fails here instead of silently 500-ing.
+import { TenantSeamError } from '../../../backend/db/tenantTable';
 
 function fakeReq(overrides: Partial<NextApiRequest> = {}): NextApiRequest {
   return {
@@ -90,9 +93,8 @@ describe('F-01 route factory', () => {
   });
 
   test('S2: an UNHANDLED retryable tenant-seam error -> 503 + Retry-After (not a 500, not a denial)', async () => {
-    const seamErr = Object.assign(new Error('TENANT_PARENT_UNREADABLE: campaigns: owner link unreadable (57014)'), {
-      name: 'TenantSeamError', code: 'TENANT_PARENT_UNREADABLE', retryable: true,
-    });
+    const seamErr = new TenantSeamError('TENANT_PARENT_UNREADABLE', 'campaigns: owner link unreadable (57014)');
+    expect(seamErr.retryable).toBe(true); // precondition from the producer itself
     const wrapped = createApiRoute(async () => { throw seamErr; }, { route: '/api/platform-test' });
     const res = fakeRes();
     await wrapped(fakeReq(), res);
@@ -103,7 +105,8 @@ describe('F-01 route factory', () => {
   });
 
   test('S2 CONTROL: a NON-retryable seam error (and any other error) is still rethrown unchanged', async () => {
-    const denial = Object.assign(new Error('TENANT_MISMATCH: x'), { name: 'TenantSeamError', code: 'TENANT_MISMATCH', retryable: false });
+    const denial = new TenantSeamError('TENANT_MISMATCH', 'x');
+    expect(denial.retryable).toBe(false); // precondition from the producer itself
     const wrapped = createApiRoute(async () => { throw denial; }, { route: '/api/platform-test' });
     await expect(wrapped(fakeReq(), fakeRes())).rejects.toBe(denial);
   });
