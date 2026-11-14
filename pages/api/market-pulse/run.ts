@@ -13,6 +13,8 @@ import {
   type MarketPulseRunInput,
 } from '../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../backend/services/marketPulseJobProcessor';
+import { randomUUID } from 'crypto';
+import { holdMarketPulseRun, releaseMarketPulseHold } from '../../../backend/services/marketPulse/marketPulseBilling';
 
 function shouldProcessMarketPulseInline(): boolean {
   if (!config.ENABLE_AUTO_WORKERS) return true;
@@ -81,9 +83,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       executor_context: executorContext,
     };
 
+    // OWNER 2026-11-14: HOLD 8 credits x AI region BEFORE anything is written (marketPulseBilling). A refusal answers
+    // with its typed code and creates no job, no run and no AI call. The hold is keyed on the pre-generated job id.
+    const jobId = randomUUID();
+    const hold = await holdMarketPulseRun({
+      orgId: companyId,
+      userId: access.userId,
+      jobId,
+      regions: regionsNormalized,
+      insightSource: resolvedInput.source_strategy,
+      validateMembership: true,
+    });
+    if (!hold.ok) {
+      const { status, ...refusal } = hold;
+      return res.status(status).json(refusal);
+    }
+    const reservation = hold.reservation;
+
     const { data: legacyJob, error: insertError } = await supabase
       .from('market_pulse_jobs_v1')
       .insert({
+        id: jobId,
         company_id: companyId,
         regions: regionsNormalized,
         status: 'PENDING',
@@ -91,16 +111,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         region_results: {},
         consolidated_result: null,
         error: null,
-        context_payload: contextPayload,
+        context_payload: { ...contextPayload, credit_reservation: reservation },
       })
       .select('id, status')
       .single();
 
     if (insertError || !legacyJob) {
+      await releaseMarketPulseHold(reservation, 'job insert failed');
       return res.status(500).json({ error: insertError?.message || 'Failed to create legacy Market Pulse job' });
     }
 
-    const run = await createMarketPulseRun(companyId, resolvedInput, legacyJob.id);
+    let run: Awaited<ReturnType<typeof createMarketPulseRun>>;
+    try {
+      run = await createMarketPulseRun(companyId, resolvedInput, legacyJob.id);
+    } catch (err) {
+      await releaseMarketPulseHold(reservation, 'run creation failed');
+      await supabase.from('market_pulse_jobs_v1').update({ status: 'FAILED', error: 'Run creation failed' }).eq('id', legacyJob.id);
+      throw err;
+    }
     const processInline = shouldProcessMarketPulseInline();
 
     if (processInline) {
@@ -119,7 +147,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       jobId: legacyJob.id,
     });
     if (!enqueued) {
-      // Shed by backpressure. The run + legacy job rows exist for retry.
+      // Shed by backpressure: nothing will process this job, so its hold is released and the job closed (a held,
+      // never-processed job would otherwise keep the credits until a reaper that is gated off).
+      await releaseMarketPulseHold(reservation, 'queue at capacity');
+      await supabase.from('market_pulse_jobs_v1').update({ status: 'FAILED', error: 'Queue at capacity' }).eq('id', legacyJob.id);
       return res.status(429).json({ error: 'Queue is at capacity. Retry shortly.', runId: run.id, legacyJobId: legacyJob.id });
     }
 

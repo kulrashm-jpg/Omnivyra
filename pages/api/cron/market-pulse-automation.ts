@@ -44,6 +44,9 @@ import {
 } from '../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../backend/services/marketPulseJobProcessor';
 import { bearerTokenMatches } from '../../../backend/security/constantTimeEqual';
+import { randomUUID } from 'crypto';
+import { holdMarketPulseRun, isMarketPulseRunDue, releaseMarketPulseHold } from '../../../backend/services/marketPulse/marketPulseBilling';
+import { checkCreditAlerts } from '../../../backend/services/creditAlertService';
 
 const BATCH_SIZE = 50;
 
@@ -58,6 +61,7 @@ type AutomationSettingsRow = {
   competitor_scope?: string | null;
   custom_direction?: string | null;
   credit_acknowledged?: boolean | null;
+  last_run_at?: string | null;
 };
 
 function isValidObjective(value: string | null | undefined): value is MarketPulseRunInput['objective'] {
@@ -106,6 +110,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     skipped_dead_letter: 0,
     skipped_tenant_invalid: 0,
     skipped_credit_unacknowledged: 0,
+    skipped_not_due: 0,
+    skipped_insufficient_credits: 0,
     failed: 0,
     errors: [] as string[],
   };
@@ -116,7 +122,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // companies enabled.
     const { data: rows, error: fetchError } = await supabase
       .from('market_pulse_automation_settings')
-      .select('company_id, is_active, cadence, objective, categories, region_scope, custom_regions, competitor_scope, custom_direction, credit_acknowledged')
+      .select('company_id, is_active, cadence, objective, categories, region_scope, custom_regions, competitor_scope, custom_direction, credit_acknowledged, last_run_at')
       .eq('is_active', true)
       .limit(BATCH_SIZE);
 
@@ -141,6 +147,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // double-check at execution time in case the DB was edited directly.
       if (!settings.credit_acknowledged) {
         results.skipped_credit_unacknowledged++;
+        continue;
+      }
+
+      // OWNER 2026-11-14: honour the company's cadence ('weekly' default, or 'daily') - the cron ticks daily.
+      if (!isMarketPulseRunDue(settings.cadence, settings.last_run_at, new Date())) {
+        results.skipped_not_due++;
         continue;
       }
 
@@ -206,8 +218,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             triggered_day: dayBucket,
           };
 
+          // OWNER 2026-11-14: HOLD 8 credits x AI region before anything is written (system-initiated, so no
+          // membership check). A refused hold SKIPS the company (no throw -> no retry) and fires the existing credit
+          // alerts as the notice; nothing is written.
+          const jobId = randomUUID();
+          const hold = await holdMarketPulseRun({
+            orgId: companyId,
+            userId: companyId,
+            jobId,
+            regions: regionsNormalized,
+            insightSource: resolvedInput.source_strategy,
+            validateMembership: false,
+          });
+          if (!hold.ok) {
+            await checkCreditAlerts(companyId).catch(() => undefined);
+            return { mode: 'skipped_credits' as const, code: hold.code };
+          }
+          const reservation = hold.reservation;
+          const releaseAndClose = async (reason: string, created: boolean) => {
+            await releaseMarketPulseHold(reservation, reason);
+            if (created) await ownedDbTable('market_pulse_jobs_v1').update({ status: 'FAILED', error: reason }).eq('id', jobId);
+          };
+
           const { data: legacyJob, error: insertError } = await ownedDbTable('market_pulse_jobs_v1')
             .insert({
+              id: jobId,
               company_id: companyId,
               regions: regionsNormalized,
               status: 'PENDING',
@@ -215,16 +250,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               region_results: {},
               consolidated_result: null,
               error: null,
-              context_payload: contextPayload,
+              context_payload: { ...contextPayload, credit_reservation: reservation },
             })
             .select('id, status')
             .single();
 
           if (insertError || !legacyJob) {
+            await releaseAndClose('job insert failed', false);
             throw new Error(insertError?.message || 'Failed to create legacy Market Pulse job');
           }
 
-          const run = await createMarketPulseRun(companyId, resolvedInput, legacyJob.id);
+          let run: Awaited<ReturnType<typeof createMarketPulseRun>>;
+          try {
+            run = await createMarketPulseRun(companyId, resolvedInput, legacyJob.id);
+          } catch (err) {
+            await releaseAndClose('run creation failed', true);
+            throw err;
+          }
+          // Cadence clock: the run has started (it is billed through the processor's settle from here on).
+          await ownedDbTable('market_pulse_automation_settings').update({ last_run_at: new Date().toISOString() }).eq('company_id', companyId);
 
           if (!config.ENABLE_AUTO_WORKERS) {
             // Same fallback the on-demand endpoint uses when workers are
@@ -235,17 +279,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             return { mode: 'inline', runId: run.id, legacyJobId: legacyJob.id };
           }
 
-          await enqueueOrThrow(jobQueue, 'engine-jobs', 'market-pulse-job', {
-            type: 'MARKET_PULSE',
-            jobId: legacyJob.id,
-          });
+          try {
+            await enqueueOrThrow(jobQueue, 'engine-jobs', 'market-pulse-job', {
+              type: 'MARKET_PULSE',
+              jobId: legacyJob.id,
+            });
+          } catch (err) {
+            await releaseAndClose('enqueue failed', true);
+            throw err;
+          }
 
           return { mode: 'enqueued', runId: run.id, legacyJobId: legacyJob.id };
         },
       );
 
       if (outcome.status === 'completed') {
-        if (outcome.result.mode === 'inline') results.inline_executed++;
+        if (outcome.result.mode === 'skipped_credits') results.skipped_insufficient_credits++;
+        else if (outcome.result.mode === 'inline') results.inline_executed++;
         else results.enqueued++;
       } else if (outcome.status === 'tenant_invalid') {
         results.skipped_tenant_invalid++;

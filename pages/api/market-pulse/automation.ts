@@ -29,7 +29,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
       const settings = await upsertAutomationSettings(companyId, {
         is_active: Boolean(body.is_active),
-        cadence: body.cadence === 'daily' ? 'daily' : 'daily',
+        // OWNER 2026-11-14: weekly by default; the company's choice is honoured (was forced to 'daily'; 055 widened the CHECK).
+        cadence: body.cadence === 'daily' ? 'daily' : 'weekly',
         objective: typeof body.objective === 'string' ? body.objective : 'growth',
         categories: Array.isArray(body.categories) ? body.categories : [],
         region_scope: typeof body.region_scope === 'string' ? body.region_scope : 'profile_markets',

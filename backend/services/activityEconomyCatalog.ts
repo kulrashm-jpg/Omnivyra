@@ -121,6 +121,7 @@ export const ACTIVITY_CLASS_MAP: Record<CreditAction, ActivityClass> = {
   // INTELLIGENCE_SCAN — background / value-gated
   prediction:                      'INTELLIGENCE_SCAN',
   insight_generation:              'INTELLIGENCE_SCAN',
+  market_pulse:                    'INTELLIGENCE_SCAN',
   pattern_detection:               'INTELLIGENCE_SCAN',
   market_positioning:              'INTELLIGENCE_SCAN',
   competitor_signals:              'INTELLIGENCE_SCAN',
