@@ -40,14 +40,11 @@ export const normalizeRole = (value?: string | null): Role | null => {
 };
 
 /**
- * Closure-015E — despite its name, this now resolves ACTIVE memberships only.
- * An invited membership confers no authority before acceptance: acceptance
- * (team/accept-invite, activate_invitation_membership) is what activates it.
- * Its ~20 callers use it as a fallback after getUserRole; they included invited
- * COMPANY_ADMIN / ADMIN / SUPER_ADMIN rows and, at several call sites, invited
- * rows of ANY role. The name is kept so those callers are unchanged.
+ * The caller's role in the company from an ACTIVE membership only (Closure-015E): an invited membership confers no
+ * authority before acceptance (team/accept-invite, activate_invitation_membership activates it). null = no active
+ * membership or the read failed.
  */
-export const getCompanyRoleIncludingInvited = async (
+export const getActiveCompanyRole = async (
   userId: string,
   companyId: string
 ): Promise<Role | null> => {
@@ -62,3 +59,11 @@ export const getCompanyRoleIncludingInvited = async (
   const row = data[0] as { role: string };
   return normalizeRole(row.role);
 };
+
+/**
+ * @deprecated Use getActiveCompanyRole. This name CONTRADICTS the body: it resolves ACTIVE memberships only and
+ * never an invited one (Closure-015E). Kept as an alias so the ~25 call sites (imported via rbacService) and the
+ * test mocks that name it keep working until the mechanical rename moves them (e9 2026-11-14: alias now; the
+ * call-site + mock move follows once rbacService re-exports getActiveCompanyRole).
+ */
+export const getCompanyRoleIncludingInvited = getActiveCompanyRole;
