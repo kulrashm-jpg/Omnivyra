@@ -53,9 +53,12 @@ export default function VoiceNotesComponent({
   // Transcription is authorised against the ACTIVE company (paired with 55's server change);
   // Viewers / view-only users can't record (Engagers can: voice_notes exception).
   const { selectedCompanyId, userRole } = useCompanyContext();
-  // e9: no recording until voice is charged; the server switch decides (fails closed).
+  // Notes themselves (list, play, delete) follow the role rule only: saving a note makes no
+  // provider call (55). Only RECORDING (-> transcribe) also needs the server voice switch,
+  // which stays off until voice is charged (e9); it fails closed.
+  const mayManageNotes = canPostCampaignMessages(userRole);
   const voiceEnabled = useVoiceEnabled();
-  const mayRecord = voiceEnabled && canPostCampaignMessages(userRole);
+  const mayRecord = voiceEnabled && mayManageNotes;
   const capTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (capTimerRef.current) clearTimeout(capTimerRef.current); }, []);
   const [isRecording, setIsRecording] = useState(false);
@@ -434,7 +437,7 @@ export default function VoiceNotesComponent({
                   >
                     <Play className="h-4 w-4" />
                   </button>
-                  {mayRecord && (
+                  {mayManageNotes && (
                   <button
                     onClick={() => deleteVoiceNote(note.id)}
                     className="p-1 hover:bg-red-100 rounded text-red-600"
