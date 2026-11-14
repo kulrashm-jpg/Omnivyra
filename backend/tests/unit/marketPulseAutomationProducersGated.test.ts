@@ -102,6 +102,13 @@ describe('closed set over the two Market Pulse tables (05: scan the TABLE, not a
   // Every file that names the enrolment table (market_pulse_automation_settings) or the run table
   // (market_pulse_jobs_v1) is a potential producer - direct (runs) or indirect (enrols). The set is pinned: a NEW file
   // naming either table fails here until it is reviewed and, if it produces automated work, routed through the gate.
+  //
+  // SCOPE / LIMITS (stated, 05): this covers APPLICATION code. A new caller of the existing writer is stopped by the
+  // writer-level gate (marketPulseAutomationWriterGated), not by this scan. SCHEMA paths, checked in the repo on
+  // origin/main 1d51b74b0: no SQL function, view or trigger writes market_pulse_automation_settings (the only trigger is
+  // its own trg_market_pulse_automation_updated_at; baseline.sql:47568), and no .rpc() in the app reaches one. Direct
+  // client writes: 20261026000000_close_anon_rls_exposure enables RLS with NO policy and REVOKEs ALL from
+  // anon/authenticated on this table. The LIVE production state (privileges, policies, prosrc) is a 83 read, not this test.
   const REVIEWED: Record<string, string> = {
     'backend/queue/jobQueue.ts': 'queue typing only',
     'backend/services/marketPulse/executorContext.ts': 'doc comment only',
