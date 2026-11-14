@@ -11,6 +11,13 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { rejectPreemptionRequest, PreemptionValidationError } from '../../../backend/services/CampaignPreemptionService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
+/**
+ * Postgres / PostgREST error codes that will NOT succeed on retry (insufficient_privilege, undefined_table / column /
+ * function, schema-cache miss). Pattern borrowed from billing/holdSettlementState (enumerate the definitive codes,
+ * default the rest to the safe side) - not the function, whose semantics are about commit, not retryability (05).
+ */
+const PERMANENT_READ_ERROR_CODES = new Set(['42501', '42P01', '42703', '42883', 'PGRST202', 'PGRST204', 'PGRST205']);
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -34,7 +41,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // Reads contract: a FAILED read is not "not found" - refuse retryably instead of a permanent 404.
     if (fetchError) {
-      console.error('[reject-preemption] request read failed', { requestId, message: fetchError.message });
+      console.error('[reject-preemption] request read failed', { requestId, code: fetchError.code, message: fetchError.message });
+      // 05: only promise a retry when one can help. A definitively-fatal error (privilege / schema) is a 500 without
+      // retryable - the client must not loop on it. Allow-list of PERMANENT codes; everything else defaults to 503.
+      if (PERMANENT_READ_ERROR_CODES.has(String(fetchError.code ?? ''))) {
+        return res.status(500).json({ error: 'Internal server error' });
+      }
       res.setHeader('Retry-After', '5');
       return res.status(503).json({ error: 'Preemption request could not be loaded. Please retry.', retryable: true });
     }

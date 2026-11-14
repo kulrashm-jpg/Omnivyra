@@ -58,6 +58,15 @@ it('a FAILED request read -> 503 + Retry-After (retryable), nothing rejected', a
   expect(st.rejected).toEqual([]);
 });
 
+it.each(['42501', '42P01', 'PGRST205'])('05: a PERMANENT read error (%s) -> 500 without retryable / Retry-After (no retry loop)', async (code) => {
+  st.fetch = { data: null, error: { message: 'permission denied for table campaign_preemption_requests', code } as any };
+  const r = await call();
+  expect(r.status).toBe(500);
+  expect(r.body).toEqual({ error: 'Internal server error' });
+  expect(r.headers['Retry-After']).toBeUndefined();
+  expect(st.rejected).toEqual([]);
+});
+
 it('CONTROL: a read that finds no request -> 404 (a real absence)', async () => {
   st.fetch = { data: null, error: null };
   const r = await call();
