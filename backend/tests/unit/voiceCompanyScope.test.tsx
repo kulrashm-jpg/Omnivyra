@@ -104,4 +104,11 @@ describe('recording limits (e9: bitrate pinned for the server size bound; 5-minu
     expect(msg).toBe('That recording was too long to send. Keep voice notes under 5 minutes, or split them.');
     expect(msg).not.toMatch(/AUDIO_TOO_LONG|413/);
   });
+  it('a 413 that carries a readable sentence (the charge under billing) is shown as-is', async () => {
+    const { transcriptionErrorMessage } = await import('../../../components/ChatVoiceButton');
+    const charged = 'Recordings are limited to 5 minutes. This one was about 6 minutes. You were charged 70 credits for the time that was processed.';
+    expect(transcriptionErrorMessage(413, charged)).toBe(charged);
+    expect(transcriptionErrorMessage(413, '   ')).toMatch(/too long to send/);
+    expect(transcriptionErrorMessage(413, null)).toMatch(/too long to send/);
+  });
 });
