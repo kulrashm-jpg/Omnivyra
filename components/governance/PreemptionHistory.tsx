@@ -27,6 +27,10 @@ interface PreemptionHistoryProps {
 
 export function PreemptionHistory({ events }: PreemptionHistoryProps) {
   const preemptionEvents = events.filter((e) => PREEMPTION_TYPES.has(e.eventType));
+  // Owner rule 3 (e9): the preemption subsystem is undeployed (see executionStatusCompat.ts),
+  // so the panel could only ever say "No preemption activity". Show it only when there is
+  // something to show.
+  if (preemptionEvents.length === 0) return null;
 
   return (
     <div className="bg-white rounded-xl p-6 shadow-sm border">
@@ -35,9 +39,6 @@ export function PreemptionHistory({ events }: PreemptionHistoryProps) {
         <h2 className="text-xl font-semibold">Preemption History</h2>
       </div>
 
-      {preemptionEvents.length === 0 ? (
-        <p className="text-sm text-gray-500">No preemption activity.</p>
-      ) : (
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
@@ -66,7 +67,6 @@ export function PreemptionHistory({ events }: PreemptionHistoryProps) {
             </tbody>
           </table>
         </div>
-      )}
     </div>
   );
 }
