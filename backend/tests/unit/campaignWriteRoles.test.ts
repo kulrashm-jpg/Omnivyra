@@ -182,6 +182,21 @@ describe('dead permission + role lists fixed', () => {
   });
 });
 
+/**
+ * Does this route call enforceCampaignWriteRole BEFORE its membership gate - or with NO recognisable gate? Either is a
+ * violation (fail CLOSED: a file the pin cannot analyse is refused). Gates: the membership-only helpers, or
+ * loadAuthorizedPlanRow (render routes; it runs enforceCompanyAccess internally and is a registered route-auth tenant
+ * primitive). Whitespace-tolerant so a formatter wrapping the arguments cannot change the verdict.
+ */
+function writeGuardMisplaced(src: string): boolean {
+  const GATE = /(?:enforceCompanyAccess|requireTenantAccess|requireCompanyAccess|requireCompanyContext|loadAuthorizedPlanRow)\s*\(/;
+  const gate = src.search(GATE);
+  if (gate < 0) return true;
+  const afterImport = src.indexOf('\n', src.indexOf('import { enforceCampaignWriteRole'));
+  const call = src.indexOf('enforceCampaignWriteRole(', afterImport < 0 ? 0 : afterImport);
+  return call < 0 || call < gate;
+}
+
 describe('inventory: no campaign write route without a role gate', () => {
   const API = path.resolve(__dirname, '../../../pages/api');
   const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true })
@@ -245,15 +260,18 @@ describe('inventory: no campaign write route without a role gate', () => {
   it('every explicit enforceCampaignWriteRole call follows the route\'s membership gate', () => {
     const wired = walk(API).filter((f) => fs.readFileSync(f, 'utf8').includes('enforceCampaignWriteRole('));
     expect(wired.length).toBeGreaterThanOrEqual(50);
-    const misplaced = wired.filter((f) => {
-      const src = fs.readFileSync(f, 'utf8');
-      // loadAuthorizedPlanRow (render routes, merged from main 1d51b74b0) runs enforceCompanyAccess internally and is
-      // a registered route-auth tenant primitive: it IS the membership gate for those routes.
-      const gate = Math.min(...[src.search(MEMBERSHIP_ONLY), src.search(/loadAuthorizedPlanRow\(req/)].filter((i) => i >= 0).concat(Number.MAX_SAFE_INTEGER));
-      if (gate === Number.MAX_SAFE_INTEGER) return true;
-      return gate < 0 || src.indexOf('enforceCampaignWriteRole(', src.indexOf('\n', src.indexOf('import { enforceCampaignWriteRole'))) < gate;
-    }).map((f) => path.relative(API, f).replace(/\\/g, '/'));
+    const misplaced = wired.filter((f) => writeGuardMisplaced(fs.readFileSync(f, 'utf8')))
+      .map((f) => path.relative(API, f).replace(/\\/g, '/'));
     expect(misplaced).toEqual([]);
+  });
+  // 83 / 05 (2026-11-14): the pin must FAIL CLOSED - a file it cannot analyse (no recognisable gate) is a violation -
+  // and must not depend on formatting.
+  it('CONTROLS: gate-less -> violation; guard before gate -> violation; wrapped-args gate -> recognised', () => {
+    const imp = "import { enforceCampaignWriteRole } from 'x';\n";
+    expect(writeGuardMisplaced(`${imp}async function h(){ await enforceCampaignWriteRole({}); }`)).toBe(true);
+    expect(writeGuardMisplaced(`${imp}async function h(){ await enforceCampaignWriteRole({}); await enforceCompanyAccess({}); }`)).toBe(true);
+    expect(writeGuardMisplaced(`${imp}async function h(){ const a = await loadAuthorizedPlanRow(\n    req,\n    res, id);\n  await enforceCampaignWriteRole({}); }`)).toBe(false);
+    expect(writeGuardMisplaced(`${imp}async function h(){ await enforceCompanyAccess({}); await enforceCampaignWriteRole({}); }`)).toBe(false);
   });
   it('platform-plan / health-report (withRBAC ALL_ROLES) are still covered by requireCampaignTenantAccess', () => {
     for (const rel of ['campaigns/platform-plan.ts', 'campaigns/health-report.ts']) {

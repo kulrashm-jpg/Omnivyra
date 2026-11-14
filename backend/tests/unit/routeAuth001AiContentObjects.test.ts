@@ -165,12 +165,16 @@ describe('voice/transcribe', () => {
   });
   describe('voice kill-switch (e9 2026-11-14, BLOCKING - money): off until voice is priced', () => {
     afterEach(() => { process.env.VOICE_TRANSCRIBE_ENABLED = 'true'; });
-    it.each([undefined, '', 'false', 'TRUE '])('VOICE_TRANSCRIBE_ENABLED=%p (off) -> 503 VOICE_UNAVAILABLE, no guard / provider / cost', async (v) => {
+    // EXACT match only (05/83): every other spelling is OFF.
+    it.each([undefined, '', 'false', 'TRUE', 'True', 'TRUE ', ' true', 'true' + String.fromCharCode(10), '1', 'yes'])('VOICE_TRANSCRIBE_ENABLED=%p (off) -> 503 VOICE_UNAVAILABLE, no guard / provider / cost', async (v) => {
       if (v === undefined) delete process.env.VOICE_TRANSCRIBE_ENABLED; else process.env.VOICE_TRANSCRIBE_ENABLED = v;
       const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
-      if (v === 'TRUE ') { expect(r.status).toBe(200); return; } // trimmed + case-insensitive 'true' is ON (control)
       expect(r).toMatchObject({ status: 503, body: { code: 'VOICE_UNAVAILABLE' } });
       noSpend();
+    });
+    it('POSITIVE CONTROL: exactly "true" turns it ON', async () => {
+      process.env.VOICE_TRANSCRIBE_ENABLED = 'true';
+      expect((await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } })).status).toBe(200);
     });
     it('auth still answers first when off: unauthenticated -> 401', async () => {
       delete process.env.VOICE_TRANSCRIBE_ENABLED;

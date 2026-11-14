@@ -64,7 +64,9 @@ export class AudioTooLongError extends Error {
  * voice_per_minute at 14 credits/min). The UI shows the mic only when GET /api/voice/status says enabled.
  */
 export function isVoiceTranscribeEnabled(): boolean {
-  return String(process.env.VOICE_TRANSCRIBE_ENABLED ?? '').trim().toLowerCase() === 'true';
+  // EXACT match, no normalisation (05/83): for a switch that gates spend, exactly ONE spelling turns it on - the same
+  // convention as CREDIT_HOLD_REAP_ENABLED and the settlement gate. 'TRUE', ' true', 'true' + newline are all OFF.
+  return process.env.VOICE_TRANSCRIBE_ENABLED === 'true';
 }
 export const VOICE_UNAVAILABLE_BODY = Object.freeze({
   error: 'Voice input is not available yet.',
