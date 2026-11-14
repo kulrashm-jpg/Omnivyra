@@ -33,7 +33,14 @@ function normalizeThemeTopic(topic: string): string {
 export async function markThemeConsumedForCampaign(campaignId: string): Promise<void> {
   if (!campaignId?.trim()) return;
   try {
-    const { data: existing, error: selectError } = await ownedDbTable('company_theme_state')
+    // S2 tier 2: the theme rows are read (and updated) only under the campaign's own tenant. A campaign with no
+    // resolvable tenant (missing row, or an unreadable one: resolveTenantOfRow answers null for both) is skipped.
+    const themeState = await themeStateOfCampaign(campaignId, 'theme state: mark CONSUMED on campaign completion');
+    if (!themeState) {
+      console.warn('companyThemeStateService: mark CONSUMED skipped (campaign has no resolvable tenant)', { campaignId });
+      return;
+    }
+    const { data: existing, error: selectError } = await themeState
       .select('id, company_id, theme_topic')
       .eq('campaign_id', campaignId);
 
@@ -46,11 +53,6 @@ export async function markThemeConsumedForCampaign(campaignId: string): Promise<
     const now = new Date().toISOString();
 
     if (rows.length > 0) {
-      const themeState = await themeStateOfCampaign(campaignId, 'theme state: mark CONSUMED on campaign completion');
-      if (!themeState) {
-        console.warn('companyThemeStateService: update CONSUMED skipped (campaign has no resolvable tenant)', { campaignId });
-        return;
-      }
       const { error: updateError } = await themeState
         .update({ state: 'CONSUMED', updated_at: now })
         .eq('campaign_id', campaignId);

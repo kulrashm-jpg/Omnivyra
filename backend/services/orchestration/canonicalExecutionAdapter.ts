@@ -253,11 +253,16 @@ async function applyContentWrite(
 ): Promise<CanonicalWriteResult> {
   if (!key) return { ok: false, reason: 'missing_key' };
   try {
-    let query = supabase
-      .from('daily_content_plans')
-      .select('id, campaign_id, execution_id, content');
-    if (campaignId) query = query.eq('campaign_id', campaignId);
-    const { data: rows } = await query;
+    // S2 tier 2: with a campaign in scope the plan rows are read through the seam, under the tenant that owns that
+    // campaign (the same derivation the write below uses); an unresolvable campaign throws TenantSeamError, which
+    // the catch turns into { ok: false } (EXECUTION_WRITE_FAILED). Without a campaign (updateExecutionLifecycle(null,
+    // key)) the key alone locates the row, so that lookup stays raw; the write is still pinned to the row's tenant.
+    const { data: rows } = campaignId
+      ? await (await planRowWriteHandle({ campaign_id: campaignId }, 'canonical execution adapter: content write read'))
+        .select('id, campaign_id, execution_id, content')
+      : await supabase
+        .from('daily_content_plans')
+        .select('id, campaign_id, execution_id, content');
     const row = (rows ?? []).find((r: any) =>
       campaignId ? rowMatchesExecId(r, key) : (String(r.execution_id ?? '') === key || String(r.id ?? '') === key || rowMatchesExecId(r, key)),
     );

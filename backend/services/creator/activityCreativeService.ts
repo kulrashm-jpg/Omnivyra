@@ -30,6 +30,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+import { systemTenantContext, tenantChildTable } from '../../db/tenantTable';
 import { ACTIVITY_CREATIVE_COMPOSITION_TYPE } from '../../../lib/content/creatorCompositionAsset';
 
 export interface ActivityCreative {
@@ -133,7 +134,16 @@ export async function resolveActivityCreative(input: {
   const ownership = await activityBelongsToCompany(companyId, activityId);
   if (!ownership.ok) return null;
 
-  const { data, error } = await ownedDbTable('daily_content_plans')
+  // S2 tier 2: post-authorization re-read, under the company the route authorized (pages/api/activity-workspace/
+  // creative.ts enforceCompanyAccess / checkContentArchitectAccess; refine-creative via refineActivityCreative) and
+  // pinned to the campaign activityBelongsToCompany just proved is that company's. A failed parent verification
+  // throws a retryable TenantSeamError (the route factory's 503), never "not found".
+  const planRows = await tenantChildTable(
+    'daily_content_plans',
+    systemTenantContext(companyId, 'activity creative: authorized company activity read'),
+    ownership.campaignId as string,
+  );
+  const { data, error } = await planRows
     .select('id, campaign_id, content, asset_type, template_id, content_status')
     .eq('id', activityId)
     .maybeSingle();

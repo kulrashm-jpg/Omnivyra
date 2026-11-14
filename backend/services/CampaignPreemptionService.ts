@@ -1,5 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
-import { systemTenantContext, tenantChildTable, tenantTable, TenantSeamError } from '../db/tenantTable';
+import { ownerOfChildRow, systemTenantContext, tenantChildTable, tenantTable, TenantSeamError } from '../db/tenantTable';
 /**
  * Controlled Preemption Execution Service.
  * Safely executes PREEMPT_LOWER_PRIORITY_CAMPAIGN when explicitly requested.
@@ -161,7 +161,8 @@ async function performPreemption(
   }
   const fromApproved = !!options?.fromApprovedRequest;
 
-  const { data: campaigns, error: fetchError } = await ownedDbTable('campaigns')
+  // S2 tier 2: both callers ran assertBothOwnedBy(params.companyId, ...) first, so the read is scoped to that company.
+  const { data: campaigns, error: fetchError } = await tenantTable('campaigns', systemTenantContext(params.companyId, 'campaign preemption: authorized company'))
     .select('id, priority_level, execution_status, blueprint_status, last_preempted_at')
     .in('id', [initiatorCampaignId, preemptedCampaignId]);
 
@@ -344,7 +345,8 @@ export async function executeCampaignPreemption(
   // Before ANY read, write or governance event: both campaigns must belong to the caller's company.
   await assertBothOwnedBy(params.companyId, initiatorCampaignId, preemptedCampaignId);
 
-  const { data: campaigns, error: fetchError } = await ownedDbTable('campaigns')
+  // S2 tier 2: scoped to the company assertBothOwnedBy just verified both campaigns against.
+  const { data: campaigns, error: fetchError } = await tenantTable('campaigns', systemTenantContext(params.companyId, 'campaign preemption: authorized company'))
     .select('id, priority_level, execution_status, blueprint_status, is_protected')
     .in('id', [initiatorCampaignId, preemptedCampaignId]);
 
@@ -414,6 +416,25 @@ export async function executeCampaignPreemption(
 }
 
 /**
+ * S2 tier 2: campaign_preemption_requests (child of campaigns via initiator_campaign_id) for ONE request, verified
+ * under the caller-authorized company. A missing / company-less request, or one whose initiator is not in that
+ * company, is "not found" (PreemptionValidationError). A FAILED read (owner link or parent) is not: the retryable
+ * TenantSeamError is rethrown so the route answers a 5xx instead of a permanent 400 (6f review; reads contract).
+ */
+async function preemptionRequestsFor(requestId: string, companyId: string, reason: string) {
+  const owner = await ownerOfChildRow('campaign_preemption_requests', String(requestId ?? ''), `${reason}: initiator campaign of the request`);
+  if (!owner) throw new PreemptionValidationError('Preemption request not found.');
+  try {
+    return await tenantChildTable('campaign_preemption_requests', systemTenantContext(companyId, reason), owner.parentId);
+  } catch (err) {
+    if (err instanceof TenantSeamError && !err.retryable) {
+      throw new PreemptionValidationError('Preemption request not found.');
+    }
+    throw err;
+  }
+}
+
+/**
  * Execute preemption from an approved request.
  * Used by approve-preemption endpoint.
  * @param requestId - Pending request ID
@@ -425,7 +446,9 @@ export async function executePreemptionFromRequest(
   justification: string,
   companyId: string
 ): Promise<ExecutePreemptionResult> {
-  const { data: request, error: fetchError } = await ownedDbTable('campaign_preemption_requests')
+  // S2 tier 2: the request row is read only through the seam, under the company approve-preemption authorized.
+  const requestsTable = await preemptionRequestsFor(requestId, companyId, 'campaign preemption: authorized company');
+  const { data: request, error: fetchError } = await requestsTable
     .select('id, initiator_campaign_id, target_campaign_id, status')
     .eq('id', requestId)
     .maybeSingle();
@@ -453,13 +476,8 @@ export async function executePreemptionFromRequest(
     { fromApprovedRequest: true }
   );
 
-  // S2 tenant seam: campaign_preemption_requests is a child of campaigns via initiator_campaign_id; the context is the
-  // authorized company (assertBothOwnedBy above).
-  const requestsTable = await tenantChildTable(
-    'campaign_preemption_requests',
-    systemTenantContext(companyId, 'campaign preemption: authorized company'),
-    String(request.initiator_campaign_id),
-  );
+  // S2 tenant seam: campaign_preemption_requests is a child of campaigns via initiator_campaign_id; the table was
+  // verified under the authorized company above (and assertBothOwnedBy re-checked both campaigns).
   const { error: updateError } = await requestsTable
     .update({
       status: 'EXECUTED',
@@ -478,7 +496,11 @@ export async function executePreemptionFromRequest(
  * Reject a pending preemption request.
  */
 export async function rejectPreemptionRequest(requestId: string, companyId: string): Promise<void> {
-  const { data: request, error: fetchError } = await ownedDbTable('campaign_preemption_requests')
+  // S2 tenant seam: the company the route authorized for this request's initiator campaign
+  // (reject-preemption.ts: enforceCompanyAccess with campaignId = initiator_campaign_id). A request whose initiator is
+  // not in that company is refused like a missing one; the request row is read only through the seam.
+  const requestsTable = await preemptionRequestsFor(requestId, companyId, 'campaign preemption reject: authorized company');
+  const { data: request, error: fetchError } = await requestsTable
     .select('id, status, initiator_campaign_id')
     .eq('id', requestId)
     .maybeSingle();
@@ -491,24 +513,6 @@ export async function rejectPreemptionRequest(requestId: string, companyId: stri
     throw new PreemptionValidationError(`Request is not pending. Current status: ${request.status}`);
   }
 
-  // S2 tenant seam: the company the route authorized for this request's initiator campaign
-  // (reject-preemption.ts: enforceCompanyAccess with campaignId = initiator_campaign_id). A request whose initiator is
-  // not in that company is refused like a missing one.
-  let requestsTable;
-  try {
-    requestsTable = await tenantChildTable(
-      'campaign_preemption_requests',
-      systemTenantContext(companyId, 'campaign preemption reject: authorized company'),
-      String(request.initiator_campaign_id ?? ''),
-    );
-  } catch (err) {
-    // An absent / foreign initiator is "not found". A FAILED parent read is not: rethrow it so the route answers a
-    // retryable 5xx instead of a permanent 400 (6f review; reads contract).
-    if (err instanceof TenantSeamError && err.code !== 'TENANT_PARENT_UNREADABLE') {
-      throw new PreemptionValidationError('Preemption request not found.');
-    }
-    throw err;
-  }
   const { error: updateError } = await requestsTable
     .update({
       status: 'REJECTED',

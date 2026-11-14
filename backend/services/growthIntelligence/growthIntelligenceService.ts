@@ -19,6 +19,7 @@ import {
   type PersistedDecisionObject,
 } from '../decisionObjectService';
 import { assertBackgroundJobContext } from '../intelligenceExecutionContext';
+import { systemTenantContext, tenantTable } from '../../db/tenantTable';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -66,8 +67,11 @@ export async function resolveCampaignIdsForCompany(
     const userIds = (roles ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
     if (userIds.length === 0) return [];
 
-    const { data: campaigns } = await supabase
-      .from('campaigns')
+    // S2 tier 2: the members' campaigns are read under THIS company (the growth-intelligence routes authorize it
+    // with requireCompanyContext; the report plugins pass their authorized company). A member's campaigns in
+    // another company - or with a NULL company - are no longer counted here. Inside the try: a refused context
+    // degrades to [] like any other failure.
+    const { data: campaigns } = await tenantTable('campaigns', systemTenantContext(companyId, 'growth intelligence: authorized company member campaigns'))
       .select('id')
       .in('user_id', userIds);
 

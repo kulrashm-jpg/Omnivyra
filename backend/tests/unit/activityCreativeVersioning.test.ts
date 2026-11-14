@@ -62,7 +62,7 @@ import { refineActivityCreative } from '../../services/creator/activityCreativeR
 const ORIGINAL_PAYLOAD = { title: 'Campaign original', url: 'https://cdn/original.png' };
 
 beforeEach(() => {
-  rows.campaigns = [{ id: 'camp-A', company_id: 'co-A' }, { id: 'camp-B', company_id: 'co-B' }];
+  rows.campaigns = [{ id: 'camp-A', company_id: 'c0a00000-0000-4000-8000-00000000000a' }, { id: 'camp-B', company_id: 'c0b00000-0000-4000-8000-00000000000b' }];
   rows.daily_content_plans = [
     {
       id: 'act-A', campaign_id: 'camp-A', asset_type: 'image', content_status: 'render_ready',
@@ -98,7 +98,7 @@ beforeEach(() => {
 
 describe('A — refinement appends; the campaign original is untouched', () => {
   it('CRITICAL: version 1 still holds the original payload afterwards', async () => {
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out.ok).toBe(true);
     const versions = envelope!.versions as Record<string, unknown>[];
     const v1 = versions.find((v) => v.version === 1)!;
@@ -107,7 +107,7 @@ describe('A — refinement appends; the campaign original is untouched', () => {
   });
 
   it('CRITICAL: the refinement is a DISTINCT new version', async () => {
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out.version).toBe(2);
     expect(out.originalVersion).toBe(1);
     const versions = envelope!.versions as Record<string, unknown>[];
@@ -117,18 +117,18 @@ describe('A — refinement appends; the campaign original is untouched', () => {
   });
 
   it('CRITICAL: currentVersion moves forward, so the workspace can tell them apart', async () => {
-    await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(envelope!.currentVersion).toBe(2);
   });
 
   it('the asset identity never changes — it is the same asset, refined', async () => {
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out.creatorAssetId).toBe('asset-1');
     expect(envelope!.id).toBe('asset-1');
   });
 
   it('the refinement records which activity it came from', async () => {
-    await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     const v2 = (envelope!.versions as Record<string, unknown>[])[1];
     const payload = v2.payload as Record<string, unknown>;
     expect(payload.refinedFromActivityId).toBe('act-A');
@@ -140,9 +140,9 @@ describe('A — refinement appends; the campaign original is untouched', () => {
 
 describe('B — refine again, and again', () => {
   it('CRITICAL: three refinements produce versions 2, 3, 4 with v1 intact', async () => {
-    const a = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
-    const b = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
-    const c = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const a = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
+    const b = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
+    const c = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect([a.version, b.version, c.version]).toEqual([2, 3, 4]);
     expect(envelope!.currentVersion).toBe(4);
     const versions = envelope!.versions as Record<string, unknown>[];
@@ -158,13 +158,13 @@ describe('B — refine again, and again', () => {
       { version: 1, op: 'generate', payload: ORIGINAL_PAYLOAD },
       { version: 7, op: 'version', payload: {} },
     ];
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out.version).toBe(8);
   });
 
   it('CRITICAL: each refinement reuses ONE composition — no duplicate reference rows', async () => {
-    await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
-    await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
+    await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     const compositionIds = orchestrate.mock.calls.map((c) => (c[0] as Record<string, unknown>).compositionId);
     expect(compositionIds).toEqual(['act-A', 'act-A']);
     // This service never writes references itself — it cannot duplicate them.
@@ -181,7 +181,7 @@ describe('C — a failed refinement costs the user nothing', () => {
   it('CRITICAL: a render throw leaves the envelope exactly as it was', async () => {
     orchestrate.mockRejectedValue(new Error('provider exploded'));
     const before = JSON.stringify(envelope);
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out.ok).toBe(false);
     expect(out.reason).toBe('render_failed');
     expect(JSON.stringify(envelope)).toBe(before);
@@ -190,7 +190,7 @@ describe('C — a failed refinement costs the user nothing', () => {
 
   it('CRITICAL: an empty render result is a failure, not a blank version', async () => {
     orchestrate.mockResolvedValue({ output: {} });
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out.ok).toBe(false);
     expect(out.reason).toBe('render_failed');
     expect(envelope!.currentVersion).toBe(1);
@@ -199,7 +199,7 @@ describe('C — a failed refinement costs the user nothing', () => {
 
   it('CRITICAL: a render that cannot be recorded is reported, not claimed', async () => {
     envelope = null; // no envelope to append to
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out.ok).toBe(false);
     expect(out.reason).toBe('asset_unavailable');
   });
@@ -208,14 +208,14 @@ describe('C — a failed refinement costs the user nothing', () => {
     rows.daily_content_plans.push({
       id: 'act-new', campaign_id: 'camp-A', asset_type: 'image', content: '{}',
     });
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-new' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-new' });
     expect(out.reason).toBe('not_refinable');
     expect(orchestrate).not.toHaveBeenCalled();
   });
 
   it('a failure never reports a version number', async () => {
     orchestrate.mockRejectedValue(new Error('x'));
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out.version).toBeNull();
     expect(out.urls).toEqual([]);
   });
@@ -225,19 +225,19 @@ describe('C — a failed refinement costs the user nothing', () => {
 
 describe('D — the company boundary survives refinement', () => {
   it('CRITICAL: tenant A cannot refine tenant B activity', async () => {
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-B' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-B' });
     expect(out.ok).toBe(false);
     expect(out.reason).toBe('activity_not_found');
     expect(orchestrate).not.toHaveBeenCalled();
   });
 
   it('CRITICAL: the render is told the authenticated company, never a supplied one', async () => {
-    await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
-    expect((orchestrate.mock.calls[0][0] as Record<string, unknown>).companyId).toBe('co-A');
+    await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
+    expect((orchestrate.mock.calls[0][0] as Record<string, unknown>).companyId).toBe('c0a00000-0000-4000-8000-00000000000a');
   });
 
   it('missing identity refuses before any lookup', async () => {
-    for (const [companyId, activityId] of [['', 'act-A'], ['co-A', '']]) {
+    for (const [companyId, activityId] of [['', 'act-A'], ['c0a00000-0000-4000-8000-00000000000a', '']]) {
       const out = await refineActivityCreative({ companyId, userId: 'u1', activityId });
       expect(out.ok).toBe(false);
     }

@@ -36,6 +36,8 @@ import {
 } from '../../services/CampaignPreemptionService';
 /* eslint-disable @typescript-eslint/no-var-requires */
 const executeRoute = require('../../../pages/api/campaigns/execute-preemption').default;
+const rejectRoute = require('../../../pages/api/campaigns/reject-preemption').default;
+const approveRoute = require('../../../pages/api/campaigns/approve-preemption').default;
 /* eslint-enable @typescript-eslint/no-var-requires */
 
 const CAMPAIGN_A2 = 'camp-a2-0-0000-0000-0000000000a2';
@@ -158,5 +160,31 @@ describe('route: POST /api/campaigns/execute-preemption binds BOTH campaigns', (
     const r = await invoke(executeRoute, { method: 'POST', as: 'A', body: body(CAMPAIGN_A2) });
     expect(r.status).toBe(200);
     expect(campaign(CAMPAIGN_A2)).toMatchObject({ execution_status: 'PREEMPTED' });
+  });
+});
+
+describe('routes: a request row that cannot be READ is a retryable 503, never a 500 with the seam message (S2 tier 2)', () => {
+  it('reject: failed request read -> 503 TEMPORARILY_UNAVAILABLE + Retry-After; no table name; nothing written', async () => {
+    failTable('campaign_preemption_requests', 'select');
+    const r = await invoke(rejectRoute, { method: 'POST', as: 'A', body: { requestId: REQ_X, companyId: CO_A } });
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({ code: 'TEMPORARILY_UNAVAILABLE' });
+    expect(JSON.stringify(r.body)).not.toMatch(/campaign_preemption_requests|TENANT_PARENT_UNREADABLE/);
+    expect(rows('campaign_preemption_requests').find((q) => q.id === REQ_X)).toMatchObject({ status: 'PENDING' });
+  });
+
+  it('CONTROL reject: the same request with no fault is not a 503 (the fault, not the route, produced it)', async () => {
+    const r = await invoke(rejectRoute, { method: 'POST', as: 'A', body: { requestId: REQ_X, companyId: CO_A } });
+    expect(r.status).not.toBe(503);
+    expect(r.status).toBe(200);
+  });
+
+  it('approve: failed request read -> 503 TEMPORARILY_UNAVAILABLE; no table name; nothing written', async () => {
+    failTable('campaign_preemption_requests', 'select');
+    const r = await invoke(approveRoute, { method: 'POST', as: 'A', body: { requestId: REQ_X, companyId: CO_A, justification: JUST } });
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({ code: 'TEMPORARILY_UNAVAILABLE' });
+    expect(JSON.stringify(r.body)).not.toMatch(/campaign_preemption_requests|TENANT_PARENT_UNREADABLE/);
+    untouched(CAMPAIGN_B);
   });
 });

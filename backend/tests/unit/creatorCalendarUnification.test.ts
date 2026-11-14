@@ -44,7 +44,13 @@ jest.mock('../../db/writeOwner', () => ({
     let insertPayload: Record<string, any> | null = null;
     let updatePayload: Record<string, any> | null = null;
 
-    const resolveResult = () => {
+    // asList: awaited as a list (the tenant seam's owner-link reads: `.select(col).eq('id', x).limit(n)`), not via
+    // maybeSingle - the single-row fixtures are returned as a one-row array there.
+    const resolveResult = (asList = false) => {
+      if (asList && mode === 'select' && (table === 'daily_content_plans' || table === 'campaigns')) {
+        const one = table === 'daily_content_plans' ? dbState.daily_content_plans_row : dbState.campaign_row;
+        return { data: one ? [one] : [], error: null };
+      }
       if (mode === 'insert') {
         captured.inserts.push({ table, payload: insertPayload! });
         return dbState.scheduled_posts_insert;
@@ -70,7 +76,7 @@ jest.mock('../../db/writeOwner', () => ({
       is: jest.fn(() => api),
       limit: jest.fn(() => api),
       maybeSingle: jest.fn(async () => resolveResult()),
-      then: (resolve: any, reject: any) => Promise.resolve(resolveResult()).then(resolve, reject),
+      then: (resolve: any, reject: any) => Promise.resolve(resolveResult(true)).then(resolve, reject),
     };
     return api;
   }),

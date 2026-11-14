@@ -40,9 +40,9 @@ beforeEach(() => { fx.leads = []; fx.attributions = []; fx.events = []; fx.signa
 
 describe('Phase 6E — Marketing Conversion Prediction repository migration (byte-identical)', () => {
   it('empty leads → empty report with the no-leads capability note', async () => {
-    const r = await getMarketingConversionPrediction('co1', 200, NOW);
+    const r = await getMarketingConversionPrediction('c0c00000-0000-4000-8000-000000000001', 200, NOW);
     expect(r).toEqual({
-      companyId: 'co1', generatedAt: '2026-06-01T00:00:00.000Z',
+      companyId: 'c0c00000-0000-4000-8000-000000000001', generatedAt: '2026-06-01T00:00:00.000Z',
       predictions: [], distribution: { high: 0, medium: 0, low: 0, cold: 0 },
       capabilityNote: 'No leads available for prediction window.',
     });
@@ -57,7 +57,7 @@ describe('Phase 6E — Marketing Conversion Prediction repository migration (byt
     fx.events = Array.from({ length: 7 }, () => ({ visitor_session_id: 's1' })); // 7 events on s1
     fx.signals = [{ crm_lead_id: 'L1', total_score: 40 }]; // +min(25, round(40/4)=10)=10
 
-    const r = await getMarketingConversionPrediction('co1', 200, NOW);
+    const r = await getMarketingConversionPrediction('c0c00000-0000-4000-8000-000000000001', 200, NOW);
 
     // L1: 10 +15(attr) +10(session) + round(log1p(7)*8)=round(2.0794*8)=round(16.6)=17 +10(signals) +18(cpc) = 80 → high
     const depth = Math.round(Math.log1p(7) * 8);
@@ -86,7 +86,7 @@ describe('Phase 6E — Marketing Conversion Prediction repository migration (byt
       { id: 'high', visitor_session_id: 's1', created_at: '2026-05-30T00:00:00Z' },
     ];
     fx.attributions = [{ lead_id: 'high', utm_medium: 'email' }];
-    const r = await getMarketingConversionPrediction('co1', 200, NOW);
+    const r = await getMarketingConversionPrediction('c0c00000-0000-4000-8000-000000000001', 200, NOW);
     expect(r.predictions.map((p) => p.leadId)).toEqual(['high', 'low']);
   });
 
@@ -94,7 +94,7 @@ describe('Phase 6E — Marketing Conversion Prediction repository migration (byt
     fx.leads = [{ id: 'L1', visitor_session_id: 's1', created_at: '2026-05-31T00:00:00Z' }];
     fx.attributions = [{ lead_id: 'L1', utm_medium: 'carrier-pigeon' }]; // not in CHANNEL_WEIGHTS
     fx.signals = [{ crm_lead_id: 'L1', total_score: 0 }]; // 0 → no signal boost
-    const r = await getMarketingConversionPrediction('co1', 200, NOW);
+    const r = await getMarketingConversionPrediction('c0c00000-0000-4000-8000-000000000001', 200, NOW);
     const p = r.predictions[0];
     expect(p.signals).toEqual(['attribution_present', 'session_stitched']); // no engagement/signal/channel
     expect(p.conversionScore).toBe(35); // 10 + 15 + 10
@@ -103,7 +103,7 @@ describe('Phase 6E — Marketing Conversion Prediction repository migration (byt
   it('engagement depth boost is capped at 20', async () => {
     fx.leads = [{ id: 'L1', visitor_session_id: 's1', created_at: '2026-05-31T00:00:00Z' }];
     fx.events = Array.from({ length: 5000 }, () => ({ visitor_session_id: 's1' }));
-    const r = await getMarketingConversionPrediction('co1', 200, NOW);
+    const r = await getMarketingConversionPrediction('c0c00000-0000-4000-8000-000000000001', 200, NOW);
     expect(r.predictions[0].signals).toContain('engagement_depth(5000)');
     // 10 baseline + 10 session + 20 (capped) = 40
     expect(r.predictions[0].conversionScore).toBe(40);
@@ -111,7 +111,7 @@ describe('Phase 6E — Marketing Conversion Prediction repository migration (byt
 
   it('fail-open: throwing sources degrade to empty inputs', async () => {
     fx.throwOn = new Set(['leads']);
-    const r = await getMarketingConversionPrediction('co1', 200, NOW);
+    const r = await getMarketingConversionPrediction('c0c00000-0000-4000-8000-000000000001', 200, NOW);
     expect(r.predictions).toEqual([]);
     expect(r.capabilityNote).toBe('No leads available for prediction window.');
   });
@@ -127,7 +127,7 @@ describe('Phase 6E — Marketing Conversion Prediction repository migration (byt
     fx.attributions = [{ lead_id: 'L1', utm_medium: 'social' }];
     fx.events = [{ visitor_session_id: 's1' }, { visitor_session_id: 's1' }];
     fx.signals = [{ crm_lead_id: 'L1', total_score: 12 }];
-    const inputs = await getConversionPredictionInputs('co1', 200);
+    const inputs = await getConversionPredictionInputs('c0c00000-0000-4000-8000-000000000001', 200);
     expect(inputs.leads).toEqual([{ id: 'L1', visitor_session_id: 's1' }]);
     expect(inputs.attrByLead).toEqual({ L1: { utmMedium: 'social' } });
     expect(inputs.eventsBySession).toEqual({ s1: 2 });

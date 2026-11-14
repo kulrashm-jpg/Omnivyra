@@ -31,6 +31,7 @@
  */
 
 import { supabase } from '../../db/supabaseClient';
+import { ownerCompanyOfRow } from '../../db/tenantTable';
 import {
   type StrategyAnalyticsDimensions,
   resolveStrategyAnalyticsDimensions,
@@ -278,15 +279,11 @@ export async function resolveStrategyAttributionForScheduledPost(
 async function resolveCompanyIdForPost(row: Record<string, unknown>): Promise<string | null> {
   const campaignId = asString(row.campaign_id);
   if (campaignId) {
+    // S2 tier 2: the campaign's owner is answered by the seam (campaigns.company_id). Missing / NULL owner -> null;
+    // a FAILED read throws a retryable TenantSeamError, which this best-effort resolver maps to null exactly as it
+    // mapped a failed raw read before (the recorder no-ops on a null companyId).
     try {
-      const { data, error } = await supabase
-        .from('campaigns')
-        .select('company_id')
-        .eq('id', campaignId)
-        .maybeSingle();
-      if (!error && data) {
-        return asString((data as Record<string, unknown>).company_id);
-      }
+      return await ownerCompanyOfRow('campaigns', campaignId, 'strategy attribution: owner of the post campaign');
     } catch {
       return null;
     }

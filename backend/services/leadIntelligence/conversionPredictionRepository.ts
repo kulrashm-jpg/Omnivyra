@@ -16,6 +16,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+import { systemTenantContext, tenantTable } from '../../db/tenantTable';
 
 export type ConversionTier = 'high' | 'medium' | 'low' | 'cold';
 
@@ -90,9 +91,13 @@ export async function getConversionPredictionInputs(
   const leadIds = leads.map((l) => l.id);
   const sessionIds = leads.map((l) => l.visitor_session_id).filter(Boolean);
 
+  // S2 tier 2: the per-lead enrichment reads run under the company whose leads were just read (the plugins /
+  // marketingConversionPredictionService pass the company the report or route authorized). Inside the existing
+  // try blocks, so a refused context degrades exactly like an absent table.
+  const leadTenant = () => systemTenantContext(companyId, 'conversion prediction: authorized company lead enrichment');
   const attrByLead: Record<string, { utmMedium: string | null }> = {};
   try {
-    const { data } = await ownedDbTable('lead_attributions')
+    const { data } = await tenantTable('lead_attributions', leadTenant())
       .select('lead_id, utm_medium')
       .in('lead_id', leadIds);
     for (const r of ((data ?? []) as any[])) {
@@ -118,7 +123,7 @@ export async function getConversionPredictionInputs(
   // Optional: lead_signals total_score.
   const signalsByLead: Record<string, number> = {};
   try {
-    const { data } = await ownedDbTable('lead_signals')
+    const { data } = await tenantTable('lead_signals', leadTenant())
       .select('crm_lead_id, total_score')
       .in('crm_lead_id', leadIds);
     for (const r of ((data ?? []) as any[])) {

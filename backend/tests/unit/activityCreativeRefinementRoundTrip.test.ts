@@ -82,7 +82,7 @@ const ORIGINAL = { title: 'Campaign original', url: 'https://cdn/original.png' }
 
 beforeEach(() => {
   for (const k of Object.keys(db)) delete db[k];
-  db.campaigns = [{ id: 'camp-A', company_id: 'co-A' }, { id: 'camp-B', company_id: 'co-B' }];
+  db.campaigns = [{ id: 'camp-A', company_id: 'c0a00000-0000-4000-8000-00000000000a' }, { id: 'camp-B', company_id: 'c0b00000-0000-4000-8000-00000000000b' }];
   db.creator_asset_attachments = [];
   db.daily_content_plans = [{
     id: 'act-A', campaign_id: 'camp-A', asset_type: 'image', content_status: 'render_ready',
@@ -92,7 +92,7 @@ beforeEach(() => {
     }),
   }];
   db.creator_assets = [{
-    id: 'asset-1', company_id: 'co-A', user_id: 'u1', creator_type: 'image', title: ORIGINAL.title,
+    id: 'asset-1', company_id: 'c0a00000-0000-4000-8000-00000000000a', user_id: 'u1', creator_type: 'image', title: ORIGINAL.title,
     url: ORIGINAL.url, files: [], metadata: {}, deleted_at: null, archived_at: null,
     library: {
       id: 'asset-1', currentVersion: 1,
@@ -113,7 +113,7 @@ const stored = () => db.creator_assets.find((r) => r.id === 'asset-1')!.library 
 
 describe('refinement persists through the real libraryReadAsset/libraryWriteAsset', () => {
   it('appends version 2, keeps the original as version 1, and reports success', async () => {
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out).toMatchObject({ ok: true, version: 2, originalVersion: 1 });
     expect(stored().currentVersion).toBe(2);
     expect(stored().versions.map((v) => v.version)).toEqual([1, 2]);
@@ -121,28 +121,28 @@ describe('refinement persists through the real libraryReadAsset/libraryWriteAsse
   });
 
   it('after a reload, the creative resolves to the refined current version', async () => {
-    await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
-    const creative = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
+    const creative = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(creative).toMatchObject({ currentVersion: 2, isRefined: true });
     expect(creative!.urls).toContain('https://cdn/refined.png');
   });
 
   it('a second refinement becomes version 3', async () => {
-    await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
-    const out = await refineActivityCreative({ companyId: 'co-A', userId: 'u1', activityId: 'act-A' });
+    await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', userId: 'u1', activityId: 'act-A' });
     expect(out).toMatchObject({ ok: true, version: 3 });
     expect(stored().versions.map((v) => v.version)).toEqual([1, 2, 3]);
   });
 
   it('a foreign company cannot refine it and the stored envelope does not move', async () => {
     const before = JSON.stringify(stored());
-    const out = await refineActivityCreative({ companyId: 'co-B', userId: 'u2', activityId: 'act-A' });
+    const out = await refineActivityCreative({ companyId: 'c0b00000-0000-4000-8000-00000000000b', userId: 'u2', activityId: 'act-A' });
     expect(out.ok).toBe(false);
     expect(JSON.stringify(stored())).toBe(before);
   });
 
   it('an unrefined creative reports version 1 and the campaign render', async () => {
-    const creative = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const creative = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(creative).toMatchObject({ currentVersion: 1, isRefined: false, urls: [ORIGINAL.url] });
   });
 });

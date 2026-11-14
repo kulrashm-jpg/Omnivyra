@@ -23,7 +23,12 @@ import { markThemeConsumedForCampaign } from './companyThemeStateService';
 export async function checkAndCompleteCampaignIfEligible(campaignId: string | null | undefined): Promise<void> {
   if (!campaignId) return;
   try {
-    const { data: campaign, error: campError } = await ownedDbTable('campaigns')
+    // S2 tenant seam: everything below runs under the campaign's own tenant (campaigns.company_id, read by the seam
+    // from the row). A campaign with no resolvable tenant (missing row / NULL company / failed read) is not completed:
+    // silent return, as before (a NULL-company campaign already stopped at the transition write; this never throws).
+    const campaignCtx = await resolveTenantOfRow('campaigns', campaignId, 'campaign auto-completion: execution_status transition');
+    if (!campaignCtx) return;
+    const { data: campaign, error: campError } = await tenantTable('campaigns', campaignCtx)
       .select('id, execution_status')
       .eq('id', campaignId)
       .maybeSingle();
@@ -61,11 +66,6 @@ export async function checkAndCompleteCampaignIfEligible(campaignId: string | nu
       return;
     }
 
-    // S2 tenant seam: the transition is written under the campaign's own tenant (campaigns.company_id, read by the
-    // seam from the row). A campaign with no resolvable tenant is not completed (silent return, as for any other
-    // ineligible campaign; this function never throws).
-    const campaignCtx = await resolveTenantOfRow('campaigns', campaignId, 'campaign auto-completion: execution_status transition');
-    if (!campaignCtx) return;
     const { error: updateError } = await tenantTable('campaigns', campaignCtx)
       .update({
         execution_status: 'COMPLETED',

@@ -20,6 +20,7 @@
  */
 
 import { supabase } from '../../db/supabaseClient';
+import { ownerCompanyOfRow, systemTenantContext, tenantTable } from '../../db/tenantTable';
 
 export type CampaignVariantStatus = 'resolved' | 'none' | 'ambiguous';
 
@@ -192,9 +193,13 @@ export async function resolveCampaignVariant(
   // ── Source 2: creator_assets (metadata.campaign_id + platform_context) ─
   // creator_assets has no first-class campaign_id column; the orchestrator
   // stamps it into metadata, so we filter on the JSONB field best-effort.
+  // S2 tier 2: metadata.campaign_id is a JSON stamp, not a foreign key, so the read is scoped to the company that owns
+  // the campaign (derived by the seam). A campaign with no owner, or a failed owner read (retryable TenantSeamError),
+  // skips this best-effort source like any other failure.
   try {
-    const { data, error } = await supabase
-      .from('creator_assets')
+    const owner = await ownerCompanyOfRow('campaigns', cid, 'campaign variant bridge: owner of the campaign');
+    if (!owner) return NONE;
+    const { data, error } = await tenantTable('creator_assets', systemTenantContext(owner, 'campaign variant bridge: creator assets of the campaign'))
       .select('platform_context, metadata')
       .eq('metadata->>campaign_id', cid)
       .limit(500);

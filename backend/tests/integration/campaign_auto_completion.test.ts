@@ -13,7 +13,16 @@ import { recordGovernanceEvent, recordCampaignCompletedEvent } from '../../servi
 import { supabase } from '../../db/supabaseClient';
 
 const CAMPAIGN_ID = 'campaign-auto-123';
-const COMPANY_ID = 'company-auto-456';
+// S2: a real (uuid) company on the campaign row - the seam derives the tenant from campaigns.company_id
+const COMPANY_ID = 'c0a17000-0000-4000-8000-000000000456';
+
+// S2: the seam calls update(payload, options) and adds .eq('company_id', ...) after the caller's .eq('id', ...).
+// Record the payload the assertions are about; keep the filter chain awaitable ({ error: null }) at any depth.
+function seamUpdate(spy: jest.Mock, payload: unknown) {
+  spy(payload);
+  const q: any = { eq: () => q, then: (ok: any, ko: any) => Promise.resolve({ error: null }).then(ok, ko) };
+  return q;
+}
 
 function chain(result: { data: any; error: any }) {
   const q: any = {
@@ -21,7 +30,7 @@ function chain(result: { data: any; error: any }) {
     eq: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     maybeSingle: jest.fn().mockImplementation(() => Promise.resolve(result)),
-    update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+    update: jest.fn((payload: unknown) => seamUpdate(jest.fn(), payload)),
   };
   q.then = (resolve: any) => Promise.resolve(result).then(resolve);
   return q;
@@ -48,12 +57,13 @@ describe('Campaign Auto Completion', () => {
         const c: any = {
           select: jest.fn().mockReturnThis(),
           eq: jest.fn().mockReturnThis(),
-          update: campaignsUpdate,
+          // S2: the seam calls update(payload, options); record the payload the assertions are about.
+          update: (payload: unknown) => seamUpdate(campaignsUpdate, payload),
         };
         c.maybeSingle = jest.fn().mockImplementation(() => {
           callCount++;
           return Promise.resolve({
-            data: callCount === 1 ? { id: CAMPAIGN_ID, execution_status: 'ACTIVE' } : null,
+            data: callCount <= 2 ? { id: CAMPAIGN_ID, company_id: COMPANY_ID, execution_status: 'ACTIVE' } : null,
             error: null,
           });
         });
@@ -100,7 +110,7 @@ describe('Campaign Auto Completion', () => {
 
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'campaigns') {
-        return chain({ data: { id: CAMPAIGN_ID, execution_status: 'ACTIVE' }, error: null });
+        return chain({ data: { id: CAMPAIGN_ID, company_id: COMPANY_ID, execution_status: 'ACTIVE' }, error: null });
       }
       if (table === 'scheduled_posts') {
         return chain({
@@ -120,8 +130,9 @@ describe('Campaign Auto Completion', () => {
         const c: any = {
           select: jest.fn().mockReturnThis(),
           eq: jest.fn().mockReturnThis(),
-          update: campaignsUpdate,
-          maybeSingle: jest.fn().mockResolvedValue({ data: { id: CAMPAIGN_ID, execution_status: 'ACTIVE' }, error: null }),
+          // S2: the seam calls update(payload, options); record the payload the assertions are about.
+          update: (payload: unknown) => seamUpdate(campaignsUpdate, payload),
+          maybeSingle: jest.fn().mockResolvedValue({ data: { id: CAMPAIGN_ID, company_id: COMPANY_ID, execution_status: 'ACTIVE' }, error: null }),
         };
         return c;
       }
@@ -151,8 +162,8 @@ describe('Campaign Auto Completion', () => {
         const c: any = {
           select: jest.fn().mockReturnThis(),
           eq: jest.fn().mockReturnThis(),
-          update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
-          maybeSingle: jest.fn().mockResolvedValue({ data: { id: CAMPAIGN_ID, execution_status: 'ACTIVE' }, error: null }),
+          update: jest.fn((payload: unknown) => seamUpdate(jest.fn(), payload)),
+          maybeSingle: jest.fn().mockResolvedValue({ data: { id: CAMPAIGN_ID, company_id: COMPANY_ID, execution_status: 'ACTIVE' }, error: null }),
         };
         return c;
       }
@@ -182,8 +193,8 @@ describe('Campaign Auto Completion', () => {
     const campaignsUpdate = jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) });
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'campaigns') {
-        const c: any = chain({ data: { id: CAMPAIGN_ID, execution_status: 'COMPLETED' }, error: null });
-        c.update = campaignsUpdate;
+        const c: any = chain({ data: { id: CAMPAIGN_ID, company_id: COMPANY_ID, execution_status: 'COMPLETED' }, error: null });
+        c.update = (payload: unknown) => seamUpdate(campaignsUpdate, payload); // S2: the seam passes update(payload, options)
         return c;
       }
       return chain({ data: null, error: null });
@@ -203,8 +214,8 @@ describe('Campaign Auto Completion', () => {
         const c: any = {
           select: jest.fn().mockReturnThis(),
           eq: jest.fn().mockReturnThis(),
-          update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
-          maybeSingle: jest.fn().mockResolvedValue({ data: { id: CAMPAIGN_ID, execution_status: 'ACTIVE' }, error: null }),
+          update: jest.fn((payload: unknown) => seamUpdate(jest.fn(), payload)),
+          maybeSingle: jest.fn().mockResolvedValue({ data: { id: CAMPAIGN_ID, company_id: COMPANY_ID, execution_status: 'ACTIVE' }, error: null }),
         };
         return c;
       }

@@ -26,7 +26,7 @@ import { logPipelineEvent } from '../../lib/shared/observability';
 import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
 import { ownedDbTable } from '../db/writeOwner';
-import { systemTenantContext, tenantChildTable, tenantTable } from '../db/tenantTable';
+import { resolveTenantOfRow, systemTenantContext, tenantChildTable, tenantTable } from '../db/tenantTable';
 import {
   makeScheduledPostIdempotencyKey,
   isIdempotencyCollision,
@@ -69,10 +69,16 @@ async function scheduleStructuredPlanRuntime(
     );
   }
 
-  const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
-    .select('id, user_id, company_id, start_date')
-    .eq('id', campaignId)
-    .single();
+  // S2 tier 2: the scheduler starts from a campaign id (BOLT pipeline / release route), so the tenant is derived
+  // from the campaign row by the seam. A missing campaign, a NULL-company campaign or a failed read yields no
+  // context and lands on the same SCHEDULING_CAMPAIGN_NOT_FOUND a failed lookup always raised.
+  const campaignTenant = await resolveTenantOfRow('campaigns', campaignId, 'structured plan scheduler: campaign lookup');
+  const { data: campaign, error: campaignError } = campaignTenant
+    ? await tenantTable('campaigns', campaignTenant)
+      .select('id, user_id, company_id, start_date')
+      .eq('id', campaignId)
+      .single()
+    : { data: null, error: null };
 
   if (campaignError || !campaign) {
     console.error('[scheduleStructuredPlan] Campaign lookup failed', {

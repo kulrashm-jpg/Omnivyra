@@ -1,5 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
-import { resolveTenantOfRow, tenantChildTable, TenantSeamError } from '../db/tenantTable';
+import { ownerCompanyOfRow, resolveTenantOfRow, tenantChildTable, TenantSeamError } from '../db/tenantTable';
 import {
   makeScheduledPostIdempotencyKey,
   isIdempotencyCollision,
@@ -512,12 +512,11 @@ async function executeBlockScheduleRuntime(
   // Prefer company_id from caller (already resolved); fall back to DB query.
   let companyId: string | null = campaign.company_id ?? null;
   if (!companyId) {
+    // S2 tier 2: "which company owns this campaign" is answered by the seam (campaigns.company_id). Missing / NULL
+    // -> null; a FAILED read throws a retryable TenantSeamError, which stays non-fatal here exactly as a failed raw
+    // read did (companyId stays null).
     try {
-      const { data: camp } = await ownedDbTable('campaigns')
-        .select('company_id')
-        .eq('id', campaignId)
-        .maybeSingle();
-      companyId = (camp as any)?.company_id ?? null;
+      companyId = await ownerCompanyOfRow('campaigns', campaignId, 'bolt block processor: owner of the campaign');
     } catch { /* non-fatal */ }
   }
 

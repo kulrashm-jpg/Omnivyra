@@ -7,7 +7,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { ownerOfChildRow } from '../../../backend/db/tenantTable';
+import { ownerOfChildRow, TenantSeamError } from '../../../backend/db/tenantTable';
+import { seamDenial } from '../../../backend/db/seamDenial';
 import { rejectPreemptionRequest, PreemptionValidationError } from '../../../backend/services/CampaignPreemptionService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
@@ -59,6 +60,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         rejected: true,
       });
     }
+    // S2 tier 2: a tenant-seam error (a request / campaign row that could not be READ, or a seam refusal) is never a
+    // 500 carrying the seam's internal message: retryable -> 503 + Retry-After, otherwise the request's not-found.
+    if (err instanceof TenantSeamError) return seamDenial(res, err, 404, { error: 'Preemption request not found' });
     console.error('[reject-preemption]', err);
     return res.status(500).json({
       error: err instanceof Error ? err.message : 'Internal server error',

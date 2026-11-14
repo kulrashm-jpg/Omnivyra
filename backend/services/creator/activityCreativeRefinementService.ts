@@ -30,7 +30,7 @@
 
 import { resolveActivityCreative, activityCreativeIsRefinable } from './activityCreativeService';
 import { libraryReadAsset, libraryWriteAsset } from '../creatorAssetPersistenceService';
-import { ownedDbTable } from '../../db/writeOwner';
+import { systemTenantContext, tenantChildTable } from '../../db/tenantTable';
 
 export type RefinementFailureReason =
   | 'activity_not_found'
@@ -196,10 +196,25 @@ export async function refineActivityCreative(input: {
 
   // The activity supplies its own brief. Nothing is invented: these are the
   // fields the campaign generation already wrote onto the row.
-  const { data: row } = await ownedDbTable('daily_content_plans')
-    .select('id, campaign_id, content, asset_type')
-    .eq('id', activityId)
-    .maybeSingle();
+  // S2 tier 2: post-authorization read under the company resolveActivityCreative just authorized (it returns null
+  // unless the activity's campaign is this company's), pinned to that campaign. Any failure leaves the brief to its
+  // defaults, exactly as a failed raw read did (the read result was never error-checked here).
+  let row: unknown = null;
+  if (creative.campaignId) {
+    try {
+      const planRows = await tenantChildTable(
+        'daily_content_plans',
+        systemTenantContext(companyId, 'activity creative refinement: authorized company activity brief'),
+        creative.campaignId,
+      );
+      ({ data: row } = await planRows
+        .select('id, campaign_id, content, asset_type')
+        .eq('id', activityId)
+        .maybeSingle());
+    } catch {
+      row = null;
+    }
+  }
   const content = asObject((row as Record<string, unknown> | null)?.content);
   const topic = compact(content.title) || compact(content.topic) || compact(content.description) || 'Refined creative';
   const platform = compact(content.platform) || compact(content.primary_platform) || 'linkedin';

@@ -405,6 +405,8 @@ describe('Campaign Finalization Guard (Stage 20)', () => {
           if (campaignsCallCount <= 2) {
             const m: any = {
               select: jest.fn().mockReturnThis(),
+              // S2 tier 2 (fixture): the campaigns read now runs through the tenant seam (.eq('company_id', ...)).
+              eq: jest.fn().mockReturnThis(),
               in: jest.fn().mockReturnThis(),
               then: (resolve: any) => Promise.resolve(selectRes).then(resolve),
             };

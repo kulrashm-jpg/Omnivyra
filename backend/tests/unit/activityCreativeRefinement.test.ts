@@ -65,8 +65,8 @@ const RENDERED = {
 beforeEach(() => {
   libEnvelope = null;
   rows.campaigns = [
-    { id: 'camp-A', company_id: 'co-A' },
-    { id: 'camp-B', company_id: 'co-B' },
+    { id: 'camp-A', company_id: 'c0a00000-0000-4000-8000-00000000000a' },
+    { id: 'camp-B', company_id: 'c0b00000-0000-4000-8000-00000000000b' },
   ];
   rows.daily_content_plans = [
     {
@@ -89,7 +89,7 @@ beforeEach(() => {
 
 describe('A — the existing relationship is read, not invented', () => {
   it('CRITICAL: an activity resolves to the creative the worker recorded', async () => {
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out).not.toBeNull();
     expect(out!.creatorAssetId).toBe('asset-1');
     expect(out!.urls).toEqual(['https://cdn/x.png']);
@@ -98,7 +98,7 @@ describe('A — the existing relationship is read, not invented', () => {
   });
 
   it('an activity that has not generated yet is NOT refinable, but is still valid', async () => {
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-pending' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-pending' });
     expect(out).not.toBeNull();               // it IS this company's activity
     expect(out!.creatorAssetId).toBeNull();
     expect(activityCreativeIsRefinable(out)).toBe(false);
@@ -123,34 +123,34 @@ describe('A — the existing relationship is read, not invented', () => {
 
 describe('B — company is the authorization boundary', () => {
   it('CRITICAL: tenant A cannot resolve tenant B activity', async () => {
-    expect(await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-B' })).toBeNull();
+    expect(await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-B' })).toBeNull();
   });
 
   it('CRITICAL: and cannot reach tenant B creative even knowing the id', async () => {
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-B' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-B' });
     // Null, not a record with a stripped asset — nothing about act-B leaks.
     expect(out).toBeNull();
   });
 
   it('CRITICAL: "not yours" is indistinguishable from "does not exist"', async () => {
-    const foreign = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-B' });
-    const missing = await resolveActivityCreative({ companyId: 'co-A', activityId: 'no-such' });
+    const foreign = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-B' });
+    const missing = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'no-such' });
     expect(foreign).toEqual(missing);
   });
 
   it('ownership is checked through the campaign, which is where company lives', async () => {
-    expect(await activityBelongsToCompany('co-A', 'act-A')).toEqual({ ok: true, campaignId: 'camp-A' });
-    expect(await activityBelongsToCompany('co-B', 'act-A')).toEqual({ ok: false, campaignId: null });
+    expect(await activityBelongsToCompany('c0a00000-0000-4000-8000-00000000000a', 'act-A')).toEqual({ ok: true, campaignId: 'camp-A' });
+    expect(await activityBelongsToCompany('c0b00000-0000-4000-8000-00000000000b', 'act-A')).toEqual({ ok: false, campaignId: null });
   });
 
   it('an activity with no campaign is not owned by anyone', async () => {
     rows.daily_content_plans.push({ id: 'orphan', campaign_id: null, content: '{}' });
-    expect(await activityBelongsToCompany('co-A', 'orphan')).toEqual({ ok: false, campaignId: null });
-    expect(await resolveActivityCreative({ companyId: 'co-A', activityId: 'orphan' })).toBeNull();
+    expect(await activityBelongsToCompany('c0a00000-0000-4000-8000-00000000000a', 'orphan')).toEqual({ ok: false, campaignId: null });
+    expect(await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'orphan' })).toBeNull();
   });
 
   it('missing identity resolves to nothing rather than to everything', async () => {
-    for (const [companyId, activityId] of [['', 'act-A'], ['co-A', ''], ['', '']]) {
+    for (const [companyId, activityId] of [['', 'act-A'], ['c0a00000-0000-4000-8000-00000000000a', ''], ['', '']]) {
       expect(await resolveActivityCreative({ companyId, activityId })).toBeNull();
     }
   });
@@ -172,26 +172,26 @@ describe('B — company is the authorization boundary', () => {
 
 describe('C — one activity, one composition, forever', () => {
   it('CRITICAL: the composition IS the activity', async () => {
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out!.compositionId).toBe('act-A');
     expect(out!.compositionType).toBe(ACTIVITY_CREATIVE_COMPOSITION_TYPE);
   });
 
   it('CRITICAL: it is NOT the Creator session token type', async () => {
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out!.compositionType).not.toBe(CREATOR_COMPOSITION_TYPE);
     expect(out!.compositionId).not.toMatch(/^creator_/);
   });
 
   it('CRITICAL: two activities never share a composition', async () => {
-    const a = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
-    const p = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-pending' });
+    const a = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
+    const p = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-pending' });
     expect(a!.compositionId).not.toEqual(p!.compositionId);
   });
 
   it('CRITICAL: it is stable across reads — regeneration reuses one composition', async () => {
-    const first = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
-    const second = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const first = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
+    const second = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(first!.compositionId).toEqual(second!.compositionId);
     // No minting: nothing random or time-based can appear in the identity.
     const src = require('fs').readFileSync(
@@ -328,7 +328,7 @@ describe('F — the stock picker and the refinement are separate things', () => 
 
 describe('G — a refinement survives leaving and returning', () => {
   it('with no refinement, the campaign original is what is shown', async () => {
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out!.currentVersion).toBe(1);
     expect(out!.isRefined).toBe(false);
     expect(out!.urls).toEqual(['https://cdn/x.png']);
@@ -347,7 +347,7 @@ describe('G — a refinement survives leaving and returning', () => {
         { version: 2, op: 'version', payload: { url: 'https://cdn/refined.png' } },
       ],
     };
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out!.currentVersion).toBe(2);
     expect(out!.isRefined).toBe(true);
     expect(out!.urls).toEqual(['https://cdn/refined.png']);
@@ -363,7 +363,7 @@ describe('G — a refinement survives leaving and returning', () => {
         { version: 3, op: 'version', payload: { url: 'https://cdn/r3.png' } },
       ],
     };
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out!.currentVersion).toBe(3);
     expect(out!.urls).toEqual(['https://cdn/r3.png']);
     // Version 1 is untouched in the history the envelope still carries.
@@ -376,13 +376,13 @@ describe('G — a refinement survives leaving and returning', () => {
       id: 'asset-1', currentVersion: 2,
       versions: [{ version: 1, op: 'generate', payload: {} }, { version: 2, op: 'version', payload: {} }],
     };
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out!.compositionId).toBe('act-A');
   });
 
   it('an unreadable envelope falls back to the campaign render, never to nothing', async () => {
     libEnvelope = null;   // persistence unavailable
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out!.urls).toEqual(['https://cdn/x.png']);
     expect(out!.isRefined).toBe(false);
   });
@@ -392,7 +392,7 @@ describe('G — a refinement survives leaving and returning', () => {
       id: 'asset-1', currentVersion: 2,
       versions: [{ version: 1, op: 'generate', payload: {} }, { version: 2, op: 'version', payload: {} }],
     };
-    const out = await resolveActivityCreative({ companyId: 'co-A', activityId: 'act-A' });
+    const out = await resolveActivityCreative({ companyId: 'c0a00000-0000-4000-8000-00000000000a', activityId: 'act-A' });
     expect(out!.urls).toEqual(['https://cdn/x.png']);
   });
 

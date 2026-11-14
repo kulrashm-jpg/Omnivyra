@@ -13,7 +13,7 @@
  */
 
 import { supabase } from '../../../db/supabaseClient';
-import { resolveTenantOfRow, tenantChildTable } from '../../../db/tenantTable';
+import { ownerOfChildRow, systemTenantContext, tenantChildTable } from '../../../db/tenantTable';
 import { getExecutionItem, getExecutionItems, isSafeActivityKey } from '../canonicalExecutionAdapter';
 import { projectExecutionState } from './orchestrationStateProjector';
 import {
@@ -41,8 +41,15 @@ async function persistProjection(
   projection: ExecutionStateProjection,
 ): Promise<{ ok: boolean; previous: ExecutionStateProjection | null }> {
   try {
-    const { data: row } = await supabase
-      .from('daily_content_plans')
+    // S2 tenant seam: read AND write under the tenant that owns the row's campaign (campaigns.company_id, derived by
+    // the seam from the row id), pinned to that campaign. A row that is missing, campaign-less or whose campaign has no
+    // tenant is not persisted (`ok: false`); a FAILED owner read throws (retryable) into the catch below -> `ok: false`,
+    // like any other persist failure (this is a fire-and-forget projection; the next write re-syncs it).
+    const reason = 'orchestration state synchronizer: persist projection';
+    const owner = await ownerOfChildRow('daily_content_plans', rowId, reason);
+    if (!owner) return { ok: false, previous: null };
+    const planRows = await tenantChildTable('daily_content_plans', systemTenantContext(owner.companyId, reason), owner.parentId);
+    const { data: row } = await planRows
       .select('id, campaign_id, content')
       .eq('id', rowId)
       .maybeSingle();
@@ -50,14 +57,6 @@ async function persistProjection(
     const content = parseContent(row as Record<string, unknown>);
     const previous = (content.orchestration_state as ExecutionStateProjection | undefined) ?? null;
     const merged = { ...content, orchestration_state: projection };
-    // S2 tenant seam: write under the tenant that owns the row's campaign (campaigns.company_id, resolved by the
-    // seam), pinned to that campaign. Unresolvable -> not persisted (`ok: false`), like any other persist failure.
-    const campaignId = String((row as { campaign_id?: unknown }).campaign_id ?? '');
-    const ctx = campaignId
-      ? await resolveTenantOfRow('campaigns', campaignId, 'orchestration state synchronizer: persist projection')
-      : null;
-    if (!ctx) return { ok: false, previous };
-    const planRows = await tenantChildTable('daily_content_plans', ctx, campaignId);
     const { error } = await planRows
       .update({ content: JSON.stringify(merged), updated_at: new Date().toISOString() })
       .eq('id', rowId);

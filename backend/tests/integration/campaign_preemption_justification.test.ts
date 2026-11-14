@@ -179,6 +179,15 @@ describe('Campaign Preemption Justification (Stage 9C-A)', () => {
             data: { id: requestId, initiator_campaign_id: initiatorId, target_campaign_id: targetId, status: 'PENDING' },
             error: null,
           });
+          // S2 tier 2 (fixture): the seam first reads the request's initiator link (.eq().limit()).
+          c.then = (resolve: any) => Promise.resolve({ data: [{ initiator_campaign_id: initiatorId }], error: null }).then(resolve);
+          return c;
+        }
+        if (table === 'campaigns') {
+          // S2 tier 2 (fixture): the initiator campaign is owned by the test company (owner walk via .limit(), parent
+          // check via .maybeSingle()).
+          const c = chain({ data: [{ company_id: PREEMPT_TEST_COMPANY }], error: null });
+          c.maybeSingle = jest.fn().mockResolvedValue({ data: { id: initiatorId }, error: null });
           return c;
         }
         return chain({ data: null, error: null });

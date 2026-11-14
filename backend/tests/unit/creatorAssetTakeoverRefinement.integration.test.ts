@@ -83,8 +83,8 @@ import { upsertCreatorAssetRecord, libraryWriteAsset } from '../../services/crea
 import { refineActivityCreative } from '../../services/creator/activityCreativeRefinementService';
 import { resolveActivityCreative } from '../../services/creator/activityCreativeService';
 
-const A = 'co-A';
-const B = 'co-B';
+const A = 'c0a00000-0000-4000-8000-00000000000a';
+const B = 'c0b00000-0000-4000-8000-00000000000b';
 const B_INPUT = { companyId: B, userId: 'u-B', creatorType: 'image', title: 'Creator asset' };
 const A_SECRET = { title: 'A-only confidential deck', url: 'https://cdn/a-private.png' };
 

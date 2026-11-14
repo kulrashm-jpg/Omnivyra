@@ -323,10 +323,16 @@ export async function getCompletedStagePlan(runId: string, stage: string): Promi
 }
 
 export async function assertCampaignValid(campaignId: string): Promise<void> {
-  const { data, error } = await ownedDbTable('campaigns')
-    .select('id')
-    .eq('id', campaignId)
-    .maybeSingle();
+  // S2 tier 2: the BOLT run holds only a campaign id here, so the tenant is derived from the campaign row by the
+  // seam (job pattern). A missing campaign, a NULL-company campaign or a failed read has no context: the same
+  // SCHEDULING_CAMPAIGN_NOT_FOUND as before.
+  const ctx = await resolveTenantOfRow('campaigns', campaignId, 'bolt pipeline: campaign validity check');
+  const { data, error } = ctx
+    ? await tenantTable('campaigns', ctx)
+      .select('id')
+      .eq('id', campaignId)
+      .maybeSingle()
+    : { data: null, error: null };
   if (error || !data) throw new BoltError(
     BOLT_ERROR_CODES.SCHEDULING_CAMPAIGN_NOT_FOUND,
     'Campaign not found',

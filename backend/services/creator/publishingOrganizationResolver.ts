@@ -14,6 +14,7 @@
  */
 
 import { supabase } from '../../db/supabaseClient';
+import { ownerCompanyOfRow } from '../../db/tenantTable';
 
 export interface PublishingOrgInput {
   socialAccountId?: string | null;
@@ -30,10 +31,11 @@ async function companyOfSocialAccount(id: string): Promise<string | null> {
 }
 
 async function companyOfCampaign(id: string): Promise<string | null> {
+  // S2 tier 2: "which company owns this campaign" is answered by the seam (campaigns.company_id). A missing / NULL
+  // owner is null; a FAILED read throws a retryable TenantSeamError, which this fail-soft resolver maps to null exactly
+  // as it mapped a failed raw read before (the caller then falls back as before).
   try {
-    const { data } = await supabase.from('campaigns').select('company_id').eq('id', id).maybeSingle();
-    const org = (data as { company_id?: string } | null)?.company_id;
-    return org ? String(org) : null;
+    return await ownerCompanyOfRow('campaigns', id, 'publishing organization: owner of the campaign');
   } catch { return null; }
 }
 

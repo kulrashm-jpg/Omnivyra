@@ -28,7 +28,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
-import { resolveTenantOfRow, tenantChildTable, TenantSeamError } from '../../db/tenantTable';
+import { ownerOfChildRow, resolveTenantOfRow, systemTenantContext, tenantChildTable, tenantTable, TenantSeamError, type TenantContext } from '../../db/tenantTable';
 import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import { getPlatformRules, listPlatformCatalog } from '../platformIntelligenceService';
 import { isIdempotencyCollision } from '../boltScheduleIdempotency';
@@ -157,10 +157,25 @@ function extractTypeMapFromPlatformRules(bundle: any): Record<string, string> | 
  * (resolved from campaigns.company_id by the seam itself, never from caller input) and pinned to that
  * campaign. Throws TenantSeamError when the campaign has no resolvable tenant (missing row / NULL company).
  */
-async function campaignPlanRows(campaignId: string, reason: string) {
+async function campaignTenant(campaignId: string, reason: string): Promise<TenantContext> {
   const ctx = await resolveTenantOfRow('campaigns', campaignId, reason);
   if (!ctx) throw new TenantSeamError('TENANT_CONTEXT_MISSING', `campaign ${campaignId} has no resolvable tenant`);
-  return tenantChildTable('daily_content_plans', ctx, campaignId);
+  return ctx;
+}
+async function campaignPlanRows(campaignId: string, reason: string, ctx?: TenantContext) {
+  return tenantChildTable('daily_content_plans', ctx ?? await campaignTenant(campaignId, reason), campaignId);
+}
+
+/**
+ * S2 tier 2 (by-id entry points): the plan row's owning company + campaign, derived by the seam from the row id
+ * (daily_content_plans -> campaigns.company_id). null = missing row / NULL-company campaign; a FAILED read throws a
+ * retryable TenantSeamError, which the entry point's catch turns into status 'error' (the row stays as it was and a
+ * later pipeline run retries it) - never 'daily_plan_not_found'.
+ */
+async function planRowOwner(dailyPlanId: string, reason: string): Promise<{ ctx: TenantContext; campaignId: string } | null> {
+  const owner = await ownerOfChildRow('daily_content_plans', dailyPlanId, reason);
+  if (!owner) return null;
+  return { ctx: systemTenantContext(owner.companyId, reason), campaignId: owner.parentId };
 }
 
 // ── Public types ────────────────────────────────────────────────────────────
@@ -274,8 +289,10 @@ async function scheduleCreatorRowPost(input: {
   // S2 tenant seam: the plan-row writes below go through the campaign's own tenant. Resolved BEFORE the
   // scheduled_posts insert, so a campaign with no resolvable tenant is refused without creating a post.
   let planRows: Awaited<ReturnType<typeof campaignPlanRows>>;
+  let planCtx: TenantContext;
   try {
-    planRows = await campaignPlanRows(campaignId, 'creator row scheduler: plan-row lifecycle writes');
+    planCtx = await campaignTenant(campaignId, 'creator row scheduler: plan-row lifecycle writes');
+    planRows = await campaignPlanRows(campaignId, 'creator row scheduler: plan-row lifecycle writes', planCtx);
   } catch (seamError: any) {
     return { status: 'error', scheduledPostId: null, reason: seamError?.message ?? 'tenant_unresolved' };
   }
@@ -313,7 +330,9 @@ async function scheduleCreatorRowPost(input: {
     // (2b) Idempotency collision — another caller already inserted this row's
     // post. Recover the existing id and continue to the lifecycle flip.
     if (isIdempotencyCollision(insertError)) {
-      const { data: existing } = await ownedDbTable('scheduled_posts')
+      // S2 tier 2: the colliding post is this row's own (idempotency key = creator-*:<row id>), so it lives
+      // under this campaign; read it through the seam pinned to the campaign.
+      const { data: existing } = await (await tenantChildTable('scheduled_posts', planCtx, campaignId))
         .select('id')
         .eq('idempotency_key', idempotencyKey)
         .maybeSingle();
@@ -531,7 +550,9 @@ export async function autoScheduleReadyCreatorRowById(
     // Safe column list (mirrors the batch scheduler's select; intentionally
     // omits `scheduled_post_id` which may be absent in some envs — the
     // idempotency short-circuit reads it from the content JSON instead).
-    const { data: rowRaw, error: rowError } = await ownedDbTable('daily_content_plans')
+    const owner = await planRowOwner(dailyPlanId, 'creator row scheduler: post-upload schedule by row id');
+    if (!owner) return { status: 'error', scheduledPostId: null, reason: 'daily_plan_not_found' };
+    const { data: rowRaw, error: rowError } = await (await tenantChildTable('daily_content_plans', owner.ctx, owner.campaignId))
       .select('id, campaign_id, date, scheduled_time, platform, content_type, title, topic, content, content_status')
       .eq('id', dailyPlanId)
       .maybeSingle();
@@ -562,7 +583,7 @@ export async function autoScheduleReadyCreatorRowById(
     }
 
     // Resolve owning user + company.
-    const { data: campaignRaw } = await ownedDbTable('campaigns')
+    const { data: campaignRaw } = await tenantTable('campaigns', owner.ctx)
       .select('id, user_id, company_id')
       .eq('id', row.campaign_id)
       .maybeSingle();
@@ -660,7 +681,9 @@ export async function scheduleRenderedAutonomousRowById(
   dailyPlanId: string,
 ): Promise<CreatorAttachmentScheduleResult> {
   try {
-    const { data: rowRaw, error: rowError } = await ownedDbTable('daily_content_plans')
+    const owner = await planRowOwner(dailyPlanId, 'creator row scheduler: render-complete schedule by row id');
+    if (!owner) return { status: 'error', scheduledPostId: null, reason: 'daily_plan_not_found' };
+    const { data: rowRaw, error: rowError } = await (await tenantChildTable('daily_content_plans', owner.ctx, owner.campaignId))
       .select('id, campaign_id, date, scheduled_time, platform, content_type, title, topic, content, content_status')
       .eq('id', dailyPlanId)
       .maybeSingle();
@@ -694,7 +717,7 @@ export async function scheduleRenderedAutonomousRowById(
     }
 
     // Resolve owning user + company.
-    const { data: campaignRaw } = await ownedDbTable('campaigns')
+    const { data: campaignRaw } = await tenantTable('campaigns', owner.ctx)
       .select('id, user_id, company_id')
       .eq('id', row.campaign_id)
       .maybeSingle();

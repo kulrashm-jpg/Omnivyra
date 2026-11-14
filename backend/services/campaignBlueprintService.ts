@@ -8,6 +8,7 @@ import { BLUEPRINT_FREEZE_WINDOW_HOURS } from '../governance/GovernanceConfig';
 import { blueprintPerItemLocksEnabled } from '../../config/featureFlags';
 import { campaignLifecycleSelect } from '../../lib/campaign/executionStatusCompat';
 import { memoRequest } from './requestScopedMemo';
+import { systemTenantContext, tenantTable } from '../db/tenantTable';
 import {
   classifyPostQueueJobs,
   isRetryStateColumnMissing,
@@ -616,9 +617,11 @@ export async function getResolvedCampaignPlanContext(
   campaignId: string,
   requireActiveBlueprint = false
 ): Promise<ResolvedCampaignPlanContext | null> {
+  // S2 tier 2: every caller (campaigns/health-report, optimize-week, platform-plan, scheduler-payload,
+  // content/generate-day) passes the company its access check AUTHORIZED, so the campaign reads are tenant-scoped.
+  const campaigns = tenantTable('campaigns', systemTenantContext(companyId, 'campaign plan context: authorized company'));
   // Stage 11: Pre-planning gate — duration_weeks must be set before blueprint resolution
-  const { data: durationRow } = await supabase
-    .from('campaigns')
+  const { data: durationRow } = await campaigns
     .select('duration_weeks')
     .eq('id', campaignId)
     .maybeSingle();
@@ -642,8 +645,7 @@ export async function getResolvedCampaignPlanContext(
   const daily_plan = campaignVersion?.campaign_snapshot?.daily_plan ?? [];
 
   if (!campaignVersion && (!campaign || !campaign.id)) {
-    const { data: campRow } = await supabase
-      .from('campaigns')
+    const { data: campRow } = await campaigns
       .select('*')
       .eq('id', campaignId)
       .maybeSingle();

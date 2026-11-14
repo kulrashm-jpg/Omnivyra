@@ -6,6 +6,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { systemTenantContext, tenantTable } from '../db/tenantTable';
 import { getTrendingTopics } from './trendingTopicsService';
 import { getLearningMetrics } from './opportunityLearningService';
 
@@ -73,6 +74,12 @@ export async function generateContentOpportunities(
 
   const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
 
+  // S2 tier 2: engagement_messages through the tenant seam. The organization was authorized by the caller
+  // (pages/api/engagement/content-opportunities enforceCompanyAccess; contentSuggestionService for pages/api/content/suggest).
+  // message.organization_id = thread.organization_id is enforced by trigger + composite FK (ENG-004), so the predicate
+  // only restates the thread scope below.
+  const messagesOf = () => tenantTable('engagement_messages', systemTenantContext(organizationId, 'content opportunities: authorized organization engagement messages'));
+
   const { data: threads } = await supabase
     .from('engagement_threads')
     .select('id')
@@ -81,8 +88,7 @@ export async function generateContentOpportunities(
   const threadIds = (threads ?? []).map((t: { id: string }) => t.id);
   if (threadIds.length === 0) return [];
 
-  const { data: messages } = await supabase
-    .from('engagement_messages')
+  const { data: messages } = await messagesOf()
     .select('id, thread_id, content')
     .in('thread_id', threadIds)
     .gte('created_at', cutoff)
@@ -128,8 +134,7 @@ export async function generateContentOpportunities(
   const cutoff48h = new Date(now - 48 * 60 * 60 * 1000).toISOString();
   const cutoff6h = new Date(now - 6 * 60 * 60 * 1000).toISOString();
 
-  const { data: msg24h } = await supabase
-    .from('engagement_messages')
+  const { data: msg24h } = await messagesOf()
     .select('id, thread_id, content')
     .in('thread_id', threadIds)
     .gte('created_at', cutoff24h)
@@ -137,8 +142,7 @@ export async function generateContentOpportunities(
     .limit(MAX_MESSAGES_SCAN);
   const msg24List = (msg24h ?? []) as Array<{ id: string; thread_id: string; content: string | null }>;
 
-  const { data: msgPrev24h } = await supabase
-    .from('engagement_messages')
+  const { data: msgPrev24h } = await messagesOf()
     .select('id, thread_id, content')
     .in('thread_id', threadIds)
     .gte('created_at', cutoff48h)
@@ -146,8 +150,7 @@ export async function generateContentOpportunities(
     .limit(MAX_MESSAGES_SCAN);
   const msgPrev24List = (msgPrev24h ?? []) as Array<{ id: string; thread_id: string; content: string | null }>;
 
-  const { data: msg6h } = await supabase
-    .from('engagement_messages')
+  const { data: msg6h } = await messagesOf()
     .select('id, thread_id')
     .in('thread_id', threadIds)
     .gte('created_at', cutoff6h);

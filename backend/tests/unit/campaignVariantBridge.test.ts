@@ -30,9 +30,14 @@ const sp = (platform: string, variant: any) => ({
   creator_attachment_metadata: [{ applied_variant: variant }],
 });
 
+// S2 tier 2 (fixture): the creator_assets source is read under the campaign's owning company, which the seam derives
+// from campaigns.company_id (a uuid) - every campaign in these cases is owned.
+const CAMPAIGN_OWNER = 'c0a00000-0000-4000-8000-0000000000a5';
+
 beforeEach(() => {
   delete mockTableData.scheduled_posts;
   delete mockTableData.creator_assets;
+  mockTableData.campaigns = { data: [{ company_id: CAMPAIGN_OWNER }], error: null };
 });
 
 describe('resolveCampaignVariant — happy paths', () => {

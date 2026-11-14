@@ -54,9 +54,23 @@ const tenantScopedIdRead = (base: any) => {
   };
   return p;
 };
+// S2 tier 2 (fixture): the service now finds a request's initiator campaign through the seam first
+// (ownerOfChildRow: select('initiator_campaign_id').eq('id', ...).limit(...)). That link read answers from the same row
+// this chain's maybeSingle serves, so every case keeps its own request row.
+const ownerLinkRead = (base: any) => {
+  const p: any = {
+    eq: () => p,
+    limit: () => p,
+    then: (resolve: any, reject: any) => Promise.resolve(base.maybeSingle()).then((r: any) => {
+      const row = r && r.data;
+      return { data: row && row.initiator_campaign_id ? [{ initiator_campaign_id: row.initiator_campaign_id }] : [], error: r ? r.error : null };
+    }).then(resolve, reject),
+  };
+  return p;
+};
 function chain(result: ChainResult) {
   const mock = {
-    select: jest.fn(function (this: any, cols?: string) { return cols === 'company_id' ? tenantParentRead() : cols === 'id' ? tenantScopedIdRead(this) : this; }),
+    select: jest.fn(function (this: any, cols?: string) { return cols === 'company_id' ? tenantParentRead() : cols === 'id' ? tenantScopedIdRead(this) : cols === 'initiator_campaign_id' ? ownerLinkRead(this) : this; }),
     eq: jest.fn().mockReturnThis(),
     neq: jest.fn().mockReturnThis(),
     in: jest.fn().mockReturnThis(),
@@ -213,7 +227,8 @@ describe('Campaign Preemption Approval Flow', () => {
       (supabase.from as jest.Mock).mockImplementation((table: string) => {
         if (table === 'campaign_preemption_requests') {
           reqCalls++;
-          if (reqCalls === 1) {
+          // S2 (fixture): reads 1-2 are the owner link + the seam read of the request; both see the row.
+          if (reqCalls <= 2) {
             const c = chain({ data: null, error: null });
             c.maybeSingle = jest.fn().mockResolvedValue({
               data: { id: requestId, initiator_campaign_id: initiatorId, target_campaign_id: targetId, status: 'PENDING' },
@@ -225,16 +240,23 @@ describe('Campaign Preemption Approval Flow', () => {
         }
         if (table === 'campaigns') {
           campCalls++;
-          if (campCalls === 1) {
-            return chainArray({
-              data: [
-                { id: initiatorId, priority_level: 'CRITICAL', execution_status: 'ACTIVE', blueprint_status: 'ACTIVE' },
-                { id: targetId, priority_level: 'HIGH', execution_status: 'ACTIVE', blueprint_status: 'ACTIVE' },
-              ],
-              error: null,
-            });
-          }
-          return chain({ data: null, error: null });
+          // S2 (fixture): the seam's owner walk and parent check read campaigns before the preemption read, so the
+          // preemption read is routed by its columns (priority_level) instead of by call order.
+          const c = chain({ data: null, error: null });
+          const seamSelect = c.select;
+          c.select = jest.fn(function (this: any, cols?: string) {
+            if (typeof cols === 'string' && cols.includes('priority_level')) {
+              return chainArray({
+                data: [
+                  { id: initiatorId, priority_level: 'CRITICAL', execution_status: 'ACTIVE', blueprint_status: 'ACTIVE' },
+                  { id: targetId, priority_level: 'HIGH', execution_status: 'ACTIVE', blueprint_status: 'ACTIVE' },
+                ],
+                error: null,
+              });
+            }
+            return seamSelect.call(c, cols);
+          });
+          return c;
         }
         if (table === 'campaign_preemption_log') {
           return chainArray({ data: { id: logId }, error: null });
@@ -268,7 +290,8 @@ describe('Campaign Preemption Approval Flow', () => {
         if (table === 'campaign_preemption_requests') {
           reqCalls++;
           const c = chain({ data: null, error: null });
-          if (reqCalls === 1) {
+          // S2 (fixture): reads 1-2 are the owner link + the seam read of the request; both see the row.
+          if (reqCalls <= 2) {
             c.maybeSingle = jest.fn().mockResolvedValue({ data: { id: requestId, initiator_campaign_id: initiatorId, status: 'PENDING' }, error: null });
           }
           return c;
@@ -326,7 +349,8 @@ describe('Campaign Preemption Approval Flow', () => {
       (supabase.from as jest.Mock).mockImplementation((table: string) => {
         if (table === 'campaign_preemption_requests') {
           const c = chain({ data: null, error: null });
-          c.maybeSingle = jest.fn().mockResolvedValue({ data: { id: requestId, status: 'EXECUTED' }, error: null });
+          // S2 (fixture): the row names its initiator campaign (the seam reaches the request through it).
+          c.maybeSingle = jest.fn().mockResolvedValue({ data: { id: requestId, initiator_campaign_id: 'campaign-initiator-uuid', status: 'EXECUTED' }, error: null });
           return c;
         }
         return chain({ data: null, error: null });
