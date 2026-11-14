@@ -13,6 +13,7 @@ import {
   type MarketPulseRunInput,
 } from '../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../backend/services/marketPulseJobProcessor';
+import { isMarketPulseAutomationEnabled, MARKET_PULSE_AUTOMATION_DISABLED } from '../../../backend/services/marketPulse/automationGate';
 
 function shouldProcessMarketPulseInline(): boolean {
   if (!config.ENABLE_AUTO_WORKERS) return true;
@@ -53,6 +54,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       delivery_mode: body.delivery_mode === 'daily_digest' ? 'daily_digest' : 'page_only',
       credit_acknowledged: Boolean(body.credit_acknowledged),
     };
+
+    // e9 BLOCKING-NOW 2026-11-14: an 'automated' run is a producer of automated Market Pulse work - the shared gate,
+    // before any read, insert, queue or AI call.
+    if (input.mode === 'automated' && !isMarketPulseAutomationEnabled()) {
+      return res.status(409).json(MARKET_PULSE_AUTOMATION_DISABLED);
+    }
 
     if (input.mode === 'automated' && !input.credit_acknowledged) {
       return res.status(400).json({ error: 'Credit acknowledgement is required for automated monitoring' });

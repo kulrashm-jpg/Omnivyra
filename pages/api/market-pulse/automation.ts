@@ -6,6 +6,7 @@ import {
   getAutomationSettings,
   upsertAutomationSettings,
 } from '../../../backend/services/marketPulseV2Service';
+import { isMarketPulseAutomationEnabled, MARKET_PULSE_AUTOMATION_DISABLED } from '../../../backend/services/marketPulse/automationGate';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
@@ -27,6 +28,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (req.method === 'POST') {
       const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+      // e9 BLOCKING-NOW 2026-11-14: ENABLING automation enrols the company in the automated cron - the shared gate.
+      // Turning it off (is_active false) and DELETE stay allowed.
+      if (Boolean(body.is_active) && !isMarketPulseAutomationEnabled()) {
+        return res.status(409).json(MARKET_PULSE_AUTOMATION_DISABLED);
+      }
       const settings = await upsertAutomationSettings(companyId, {
         is_active: Boolean(body.is_active),
         cadence: body.cadence === 'daily' ? 'daily' : 'daily',
