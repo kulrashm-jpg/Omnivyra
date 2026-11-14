@@ -13,6 +13,8 @@ import { render, screen } from '@testing-library/react';
 
 let ctx: Record<string, unknown> = {};
 jest.mock('../../../components/CompanyContext', () => ({ useCompanyContext: () => ctx }));
+// Voice switched ON for these tests; the server switch itself is covered in voiceEnabledSwitch.test.tsx.
+jest.mock('../../../hooks/useVoiceEnabled', () => ({ useVoiceEnabled: () => true }));
 
 import ChatVoiceButton from '../../../components/ChatVoiceButton';
 
