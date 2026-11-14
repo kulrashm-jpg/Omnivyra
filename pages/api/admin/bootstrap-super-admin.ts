@@ -5,7 +5,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Establishes the canonical DB-backed SUPER_ADMIN authority. Three modes:
  *
  *   mode='promote' — an existing SUPER_ADMIN promotes another user.
- *     Body: { mode: 'promote', targetUserId: string, organizationId?: string }
+ *     Body: { mode: 'promote', targetUserId: string, organizationId: string }
+ *     organizationId is REQUIRED (e9 2026-11-14): a promotion binds to the org the operator names, never to an org
+ *     inferred from the target's active company / latest membership. That fallback serves the two bootstrap modes only.
  *     Auth: requireCapability(IDENTITY_ADMIN_ASSIGN) — phishing-resistant
  *           step-up + trusted device.
  *
@@ -127,13 +129,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       await deny('targetUserId required', ip, ua);
       return res.status(400).json({ error: 'targetUserId required for mode=promote' });
     }
-    const organizationId = typeof body.organizationId === 'string' ? body.organizationId : null;
+    const organizationId = typeof body.organizationId === 'string' ? body.organizationId.trim() : '';
+    if (!organizationId) {
+      await deny('organizationId required', ip, ua);
+      return res.status(400).json({ error: 'organizationId required for mode=promote' });
+    }
 
     const guard = await requireCapability(req, res, {
       capability: IDENTITY_ADMIN_ASSIGN,
       reason: `super-admin promotes user ${targetUserId} to SUPER_ADMIN`,
       resourceId: targetUserId,
-      organizationId: organizationId ?? undefined,
+      organizationId,
     });
     if (guard.ok !== true) return;
 
@@ -521,12 +527,8 @@ async function resolveBindingOrganization(userId: string, organizationIdOverride
 
 async function assignSuperAdmin(
   userId: string,
-  organizationIdOverride: string | null,
+  organizationId: string,   // REQUIRED by mode=promote - no resolveBindingOrganization fallback here (e9 2026-11-14)
 ): Promise<AssignResult | AssignFailure> {
-  const organizationId = await resolveBindingOrganization(userId, organizationIdOverride);
-  if (!organizationId) {
-    return { ok: false, reason: 'no_organization_to_bind', status: 412 };
-  }
 
   // Closure-015M (D): the governed grant function (supabase/proposals/closure015l/
   // 02_assign_super_admin_rpc.sql). One transaction that locks the company row

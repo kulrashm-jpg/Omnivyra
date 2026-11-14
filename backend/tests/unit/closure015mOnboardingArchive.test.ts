@@ -509,6 +509,19 @@ describe('D — bootstrap-super-admin adopts the governed assign_super_admin fun
     expect(row()).toMatchObject({ role: 'SUPER_ADMIN', status: 'active' });
   });
 
+  it.each([['absent', undefined], ['empty', ''], ['blank', '   '], ['non-string', 42]])(
+    'e9 2026-11-14: organizationId %s → 400 before authorization; no rpc, no membership write, no fallback org', async (_l, org) => {
+      world();
+      mockRpc.fn = jest.fn(() => ({ data: [{ role_row_id: 'x' }], error: null }));
+      const r = await promote(PSA, { organizationId: org });
+      expect(r.status).toBe(400);
+      expect(r.body).toEqual({ error: 'organizationId required for mode=promote' });
+      expect(mockRpc.fn).not.toHaveBeenCalled();
+      expect(directGrantWrites()).toHaveLength(0);
+      expect(row()).toMatchObject({ role: 'CONTENT_CREATOR', status: 'invited' });
+    },
+  );
+
   it('authorization is unchanged: a company admin cannot promote (403) and the function is never called', async () => {
     world();
     mockRpc.fn = jest.fn(() => ({ data: [{ role_row_id: 'x' }], error: null }));
