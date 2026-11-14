@@ -58,7 +58,23 @@ it('a FAILED request read -> 503 + Retry-After (retryable), nothing rejected', a
   expect(st.rejected).toEqual([]);
 });
 
-it.each(['42501', '42P01', 'PGRST205'])('05: a PERMANENT read error (%s) -> 500 without retryable / Retry-After (no retry loop)', async (code) => {
+it("05: 22P02 (malformed id - caller input) -> 400, not a 500 and not retryable", async () => {
+  st.fetch = { data: null, error: { message: 'invalid input syntax for type uuid: "not-a-uuid"', code: '22P02' } as any };
+  const r = await call();
+  expect(r.status).toBe(400);
+  expect(r.body).toEqual({ error: 'Invalid preemption request id' });
+  expect(r.headers['Retry-After']).toBeUndefined();
+  expect(st.rejected).toEqual([]);
+});
+
+it('05: an UNKNOWN code defaults to retryable 503 (the default points away from the irreversible outcome)', async () => {
+  st.fetch = { data: null, error: { message: 'something new', code: 'XX999' } as any };
+  const r = await call();
+  expect(r.status).toBe(503);
+  expect(r.headers['Retry-After']).toBe('5');
+});
+
+it.each(['42501', '42P01', '42601', '42804', 'PGRST100', 'PGRST205'])('05: a PERMANENT read error (%s) -> 500 without retryable / Retry-After (no retry loop)', async (code) => {
   st.fetch = { data: null, error: { message: 'permission denied for table campaign_preemption_requests', code } as any };
   const r = await call();
   expect(r.status).toBe(500);

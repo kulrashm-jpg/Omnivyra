@@ -12,11 +12,25 @@ import { rejectPreemptionRequest, PreemptionValidationError } from '../../../bac
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 /**
- * Postgres / PostgREST error codes that will NOT succeed on retry (insufficient_privilege, undefined_table / column /
- * function, schema-cache miss). Pattern borrowed from billing/holdSettlementState (enumerate the definitive codes,
- * default the rest to the safe side) - not the function, whose semantics are about commit, not retryability (05).
+ * Postgres / PostgREST error codes that will NOT succeed on a client retry. Pattern borrowed from
+ * billing/holdSettlementState (enumerate the definitive codes) - not its function, whose semantics are about commit.
+ *
+ * DEFAULT POLARITY (05): an UNKNOWN code here defaults to RETRYABLE (503), the opposite of isDefinitiveDbRefusal, which
+ * defaults an unknown code to NOT definitive. Both follow one rule - the default points AWAY from the irreversible
+ * outcome: there, wrongly calling an error definitive releases a hold that may have settled (money); here, wrongly
+ * calling one permanent only denies a retry of a transient read (availability, nothing to undo).
+ *
+ * PGRST116 (singular row-count mismatch) is deliberately NOT listed: this route reads with maybeSingle(), where zero
+ * rows is data=null (the 404 branch) and >1 rows cannot happen on a primary-key filter - so it falls to the default.
  */
-const PERMANENT_READ_ERROR_CODES = new Set(['42501', '42P01', '42703', '42883', 'PGRST202', 'PGRST204', 'PGRST205']);
+const PERMANENT_READ_ERROR_CODES = new Set([
+  '42501', '42P01', '42703', '42883', '42601', '42804', '42846', '42P02',   // privilege / schema / statement errors
+  'PGRST100', 'PGRST202', 'PGRST204', 'PGRST205',                             // query parse + schema-cache misses
+]);
+/** Caller input the server can never process (a malformed id): the request is invalid, not the server broken (05). */
+const INVALID_INPUT_CODES = new Set(['22P02']);
+/** Schema-cache misses: permanent for the CLIENT, but an operator reload fixes them - log them as such (05). */
+const SCHEMA_CACHE_CODES = new Set(['PGRST202', 'PGRST204', 'PGRST205'])
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -44,7 +58,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.error('[reject-preemption] request read failed', { requestId, code: fetchError.code, message: fetchError.message });
       // 05: only promise a retry when one can help. A definitively-fatal error (privilege / schema) is a 500 without
       // retryable - the client must not loop on it. Allow-list of PERMANENT codes; everything else defaults to 503.
-      if (PERMANENT_READ_ERROR_CODES.has(String(fetchError.code ?? ''))) {
+      const code = String(fetchError.code ?? '');
+      if (INVALID_INPUT_CODES.has(code)) {
+        return res.status(400).json({ error: 'Invalid preemption request id' });
+      }
+      if (PERMANENT_READ_ERROR_CODES.has(code)) {
+        if (SCHEMA_CACHE_CODES.has(code)) console.error('[reject-preemption] schema cache miss - an operator schema reload fixes this', { code });
         return res.status(500).json({ error: 'Internal server error' });
       }
       res.setHeader('Retry-After', '5');
