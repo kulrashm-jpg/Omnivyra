@@ -99,8 +99,9 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     });
     return res.status(200).json({ ok: true, event: ev });
   } catch (err: any) {
+    // e9: never echo internal error text (it can carry table / constraint detail) - log it, answer generically.
     console.error('[cost-governance POST] failed:', err?.message);
-    return res.status(500).json({ error: err?.message ?? 'Cost governance action failed' });
+    return res.status(500).json({ error: 'Cost governance action failed' });
   }
 }
 
