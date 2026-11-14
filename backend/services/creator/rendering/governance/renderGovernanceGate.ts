@@ -32,19 +32,15 @@ export async function evaluateRenderGovernanceGate(
   try {
     const now = ctx.now ?? new Date();
     const since = new Date(now.getTime() - 24 * 3600 * 1000).toISOString();
-    const [orgGov, globalGov, dailyJobs] = (await Promise.all([
+    const [orgGov, globalGov] = (await Promise.all([
       supabase.from('creator_render_governance_state').select('*').eq('organization_id', orgId).maybeSingle(),
       supabase.from('creator_render_governance_state').select('*').eq('organization_id', GLOBAL_GOVERNANCE_SENTINEL).maybeSingle(),
-      supabase.from('creator_render_job').select('id').eq('organization_id', orgId).gte('created_at', since).limit(1000),
     ])) as Read[];
     if (orgGov?.error) return unavailable(`org governance: ${describe(orgGov.error)}`);
     if (globalGov?.error) return unavailable(`global governance: ${describe(globalGov.error)}`);
-    if (dailyJobs?.error) return unavailable(`daily jobs: ${describe(dailyJobs.error)}`);
-    if (!Array.isArray(dailyJobs?.data)) return unavailable('daily jobs: no array body');
 
-    // The DAILY QUOTA uses an EXACT count (e9 / 05, 2026-11-11). The id list above is capped at 1000
-    // rows (it only scopes the concurrency count below), so its length clamps at 1000: an org whose
-    // max_daily_renders is set above 1000 had a quota that could never trip.
+    // The DAILY QUOTA uses an EXACT count (e9 / 05, 2026-11-11): a capped list's length could never trip a
+    // max_daily_renders above its cap.
     const dailyCountRead = (await supabase
       .from('creator_render_job').select('id', { count: 'exact', head: true })
       .eq('organization_id', orgId).gte('created_at', since)) as Read & { count?: number | null };
@@ -52,22 +48,22 @@ export async function evaluateRenderGovernanceGate(
     if (typeof dailyCountRead?.count !== 'number') return unavailable('daily count: no count');
     const dailyRenderCount = dailyCountRead.count;
 
-    // CONCURRENCY IS PER TENANT (e9 ruling 3, 2026-11-11). creator_render_job_state has no organization
-    // column, and the count used to run over EVERY tenant's active jobs, so one tenant's renders could
-    // exhaust another's max_concurrent_renders. It is now scoped to THIS org's jobs from the window
-    // above (a job still active more than 24h after creation is outside it: such a job is stale, and
-    // the dead-runner takeover is its own follow-up).
-    const orgJobIds = (dailyJobs.data as { id?: unknown }[]).map((j) => String(j?.id ?? '')).filter(Boolean);
-    let activeCount = 0;
-    if (orgJobIds.length > 0) {
-      const activeStates = (await supabase
-        .from('creator_render_job_state').select('current_state')
-        .in('render_job_id', orgJobIds)
-        .in('current_state', ['queued', 'rendering', 'processing', 'moderation']).limit(1000)) as Read;
-      if (activeStates?.error) return unavailable(`active states: ${describe(activeStates.error)}`);
-      if (!Array.isArray(activeStates?.data)) return unavailable('active states: no array body');
-      activeCount = (activeStates.data as unknown[]).length;
-    }
+    // CONCURRENCY IS PER TENANT (e9 ruling 3, 2026-11-11) and EXACT (e9 / 05, 2026-11-14).
+    // creator_render_job_state has no organization column, so the count joins its job
+    // (render_job_id -> creator_render_job.id, FK) with an INNER embed and counts THIS org's in-flight
+    // states inside the 24h window (a job still active after 24h is stale; the dead-runner takeover is its
+    // own follow-up). This used to scope through an UNORDERED .limit(1000) id list, so an org with more than
+    // 1000 renders in 24h counted an arbitrary subset, missed in-flight jobs and could exceed its cap.
+    // No number = unavailable (fail closed), never 0.
+    const activeCountRead = (await supabase
+      .from('creator_render_job_state')
+      .select('render_job_id, creator_render_job!inner(organization_id, created_at)', { count: 'exact', head: true })
+      .eq('creator_render_job.organization_id', orgId)
+      .gte('creator_render_job.created_at', since)
+      .in('current_state', ['queued', 'rendering', 'processing', 'moderation'])) as Read & { count?: number | null };
+    if (activeCountRead?.error) return unavailable(`active count: ${describe(activeCountRead.error)}`);
+    if (typeof activeCountRead?.count !== 'number') return unavailable('active count: no count');
+    const activeCount = activeCountRead.count;
 
     const decision = evaluateRenderGovernance(
       orgGov?.data ? coerceGovernanceRow(orgGov.data, orgId) : null,
