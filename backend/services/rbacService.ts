@@ -11,6 +11,9 @@ import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 
 export { getCompanyRoleIncludingInvited, normalizePermissionRole, Role };
+// e9 2026-11-14: the honest name (the body returns ACTIVE memberships only; the old name produced a false privilege report).
+// 55 moves the call sites to it and keeps getCompanyRoleIncludingInvited as a deprecated alias in rbacPrimitives.
+export { getCompanyRoleIncludingInvited as getActiveCompanyRole };
 
 type RbacPermissions = Record<string, string[]>;
 type RbacConfig = {
