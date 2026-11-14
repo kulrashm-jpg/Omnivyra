@@ -11,6 +11,9 @@ import { getRequestId, getTraceId, hasRequestMemoScope } from '../../../lib/plat
 import { registry } from '../../../backend/observability/registry';
 // 05 (2026-11-14): the route factory DUCK-TYPES the seam error (lib/ may not import backend/). The test pins that
 // contract against the REAL producer, so a rename of name/retryable/code fails here instead of silently 500-ing.
+// Mutations covered (05): rename TenantSeamError.name -> the factory stops matching and rethrows, so the 503 test
+// rejects; rename/flip retryable -> the producer precondition below fails; the unreadable path throwing another
+// error type -> tenantTable.test's unreadable case fails. No mutation breaks the mapping while all three stay green.
 import { TenantSeamError } from '../../../backend/db/tenantTable';
 
 function fakeReq(overrides: Partial<NextApiRequest> = {}): NextApiRequest {
