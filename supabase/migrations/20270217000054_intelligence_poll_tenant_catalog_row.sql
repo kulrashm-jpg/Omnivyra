@@ -14,6 +14,10 @@
 --     make the preview show a different number (e.g. 7 credits at a 0.001 rate) from the 1 credit actually charged.
 --     The postcondition below therefore also asserts that NO active action_pricing_config row exists for this key.
 --   * credits is an integer count of credits: independent of credit_rate_usd, so the rate equalisation cannot move it.
+--   * EXPECTED CONSEQUENCE (05): the key is deliberately credit_cost_config-ONLY, so it is ABSENT from
+--     public.v_pricing_catalog (that view enumerates action_pricing_config keys: FROM action_pricing_config apc LEFT JOIN
+--     credit_cost_config ccc). Do NOT "fix" its absence by adding an apc row - the postcondition forbids exactly that;
+--     the fix, if the view must list it, is the view (or resolveActivityCreditRange reading source_type), not the row.
 --
 -- SAFETY: one INSERT ... ON CONFLICT (action_type) DO NOTHING; no DDL, no GRANT (existing table, posture unchanged).
 -- An existing row with the SAME values is accepted (re-run); an existing row with DIFFERENT values fails the
