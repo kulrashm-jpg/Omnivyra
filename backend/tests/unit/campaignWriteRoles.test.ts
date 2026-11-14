@@ -245,7 +245,10 @@ describe('inventory: no campaign write route without a role gate', () => {
     expect(wired.length).toBeGreaterThanOrEqual(50);
     const misplaced = wired.filter((f) => {
       const src = fs.readFileSync(f, 'utf8');
-      const gate = src.search(MEMBERSHIP_ONLY);
+      // loadAuthorizedPlanRow (render routes, merged from main 1d51b74b0) runs enforceCompanyAccess internally and is
+      // a registered route-auth tenant primitive: it IS the membership gate for those routes.
+      const gate = Math.min(...[src.search(MEMBERSHIP_ONLY), src.search(/loadAuthorizedPlanRow\(req/)].filter((i) => i >= 0).concat(Number.MAX_SAFE_INTEGER));
+      if (gate === Number.MAX_SAFE_INTEGER) return true;
       return gate < 0 || src.indexOf('enforceCampaignWriteRole(', src.indexOf('\n', src.indexOf('import { enforceCampaignWriteRole'))) < gate;
     }).map((f) => path.relative(API, f).replace(/\\/g, '/'));
     expect(misplaced).toEqual([]);
