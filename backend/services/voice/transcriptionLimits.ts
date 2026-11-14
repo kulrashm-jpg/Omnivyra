@@ -15,6 +15,21 @@ export const AUDIO_DURATION_TOLERANCE_SECONDS = 1;
 export const PINNED_RECORDER_BITS_PER_SECOND = 32_000;
 export const MAX_AUDIO_BYTES = Math.ceil(MAX_AUDIO_SECONDS * (PINNED_RECORDER_BITS_PER_SECOND / 8) * 1.1); // 1,320,000
 
+/**
+ * Layer-2 refusal when billing is ENFORCED (e9 2026-11-14, owner rule "stopped or suspended work is charged at actual
+ * consumption"): the provider already processed the audio, so the refused attempt is charged for the time processed,
+ * capped at the VOICE class maximum; the transcript is still discarded.
+ */
+export function audioTooLongChargedBody(seconds: number, chargedCredits: number) {
+  const minutes = Math.round((seconds / 60) * 10) / 10;
+  return {
+    error: `Recordings are limited to 5 minutes. This one was about ${minutes} minutes, so it was not transcribed. ` +
+      `You were charged ${chargedCredits} credits for the time that was processed.`,
+    code: 'AUDIO_TOO_LONG',
+    charged_credits: chargedCredits,
+  };
+}
+
 export const AUDIO_TOO_LONG_BODY = {
   error: 'Recordings are limited to 5 minutes.',
   code: 'AUDIO_TOO_LONG',

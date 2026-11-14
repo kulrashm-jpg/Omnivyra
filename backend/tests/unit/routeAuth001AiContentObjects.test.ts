@@ -140,13 +140,23 @@ describe('voice/transcribe', () => {
       await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
       expect(mockEngine.settled).toEqual([7]);
     });
-    it('(b) 5:01 is refused 413 AUDIO_TOO_LONG, hold released, nothing charged, no transcript', async () => {
-      whisperSays(301.5);
+    // e9 2026-11-14 (option 2, owner rule): the provider already processed the audio, so the refused attempt is
+    // SETTLED at actual - capped at the VOICE class maximum - and still refused with the transcript discarded.
+    const VOICE_MAX = jest.requireActual('../../services/activityEconomyCatalog').ACTIVITY_CLASS_ECONOMICS.VOICE.maximumCredits as number;
+    it('(b) 5:01 is refused 413 AUDIO_TOO_LONG, charged actual (capped at VOICE max), no transcript', async () => {
+      whisperSays(301.5); // ceil(301.5 x 14 / 60) = 71
       const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
-      expect(r).toMatchObject({ status: 413, body: { code: 'AUDIO_TOO_LONG' } });
+      expect(r).toMatchObject({ status: 413, body: { code: 'AUDIO_TOO_LONG', charged_credits: Math.min(VOICE_MAX, 71) } });
+      expect(r.body.error).toMatch(/limited to 5 minutes[\s\S]*charged/);
       expect(r.body.transcription).toBeUndefined();
-      expect(mockEngine.settled).toEqual([]);
-      expect(mockEngine.released).toBe(1);
+      expect(mockEngine.settled).toEqual([Math.min(VOICE_MAX, 71)]);
+      expect(mockEngine.released).toBe(0);
+    });
+    it('a 7-minute recording is charged at most the VOICE max', async () => {
+      whisperSays(420); // ceil(420 x 14 / 60) = 98 > any VOICE max
+      const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
+      expect(r.status).toBe(413);
+      expect(mockEngine.settled).toEqual([VOICE_MAX]);
     });
     it('(c) an oversize body is refused 413 before the guard, any hold and any provider call', async () => {
       const big = 'data:audio/webm;base64,' + 'A'.repeat(Math.ceil((1_320_001 * 4) / 3) + 4);

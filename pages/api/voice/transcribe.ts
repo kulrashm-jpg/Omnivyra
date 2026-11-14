@@ -23,7 +23,9 @@ import {
   exceedsPreCallSizeBound,
   isVoiceTranscribeEnabled,
   VOICE_UNAVAILABLE_BODY,
+  audioTooLongChargedBody,
 } from '../../../backend/services/voice/transcriptionLimits';
+import { ACTIVITY_CLASS_ECONOMICS } from '../../../backend/services/activityEconomyCatalog';
 
 // SEC91-D9: every transcription-provider request is time-bounded (they had no
 // timeout, so a stalled upstream held the function until the platform killed it).
@@ -118,8 +120,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Billing (e1 / e9, pricing hold): DARK until the credit-economy flip - 'off' keeps the unbilled path exactly.
     // 'enforce': executeWithEntryConsumption FIXED path on 'voice_per_minute'; the hold is the VOICE class maximum;
     // the settled amount is the ACTUAL duration, set as amountOverride after the call (the engine reads it after the
-    // executor returns). A refused-too-long run throws inside the executor: no consumable event fired, so the engine
-    // releases the hold and charges nothing.
+    // executor returns). A refused-too-long run (>301 s) is SETTLED at actual, capped at the VOICE max, and answered 413
+    // (e9 option 2). With billing OFF the off-path below still refuses it uncharged (the switch keeps voice off anyway).
     let transcription;
     try {
       const ecMode = await getCreditEconomyExecutionMode({ organizationId: voiceOrgId, surface: 'voice.transcribe' });
@@ -129,7 +131,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         const referenceId = createHash('sha256')
           .update([voiceOrgId, callerUserId, headerKey || String(audioFile)].join('|'))
           .digest('hex').slice(0, 40);
-        const billingOpts: ExecuteWithEntryConsumptionOptionsFixed<Awaited<ReturnType<typeof runTranscription>>> = {
+        // Layer 2 under ENFORCE (e9 2026-11-14, option 2): a >301 s recording is NOT released for free - the provider
+        // already processed it - it is settled at actual, capped at the VOICE class maximum, then refused (413).
+        const voiceMaxCredits = ACTIVITY_CLASS_ECONOMICS.VOICE.maximumCredits;
+        type Billed = { t: Awaited<ReturnType<typeof transcribeWithWhisper>>; tooLong: boolean; credits: number };
+        const billingOpts: ExecuteWithEntryConsumptionOptionsFixed<Billed> = {
           userId: callerUserId,
           orgId: voiceOrgId,
           action: 'voice_per_minute',
@@ -138,15 +144,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           idempotencyKey: makeIdempotencyKey(callerUserId, 'voice_per_minute', referenceId),
           validateMembership: true,
           executor: async () => {
-            const t = await runTranscription();
-            billingOpts.amountOverride = creditsForSeconds(measuredSeconds, perMinute);
-            return t;
+            const t = provider === 'whisper' ? await transcribeWithWhisper(audioFile) : await transcribeWithAssemblyAI(audioFile);
+            measuredSeconds = Number((t as any)?.duration) || 0;
+            const tooLong = exceedsDurationLimit(measuredSeconds);
+            const actual = creditsForSeconds(measuredSeconds, perMinute);
+            const credits = tooLong ? Math.min(voiceMaxCredits, actual) : actual;
+            billingOpts.amountOverride = credits;
+            return { t, tooLong, credits };
           },
         };
         const billed = await executeWithEntryConsumption(billingOpts);
         switch (billed.status) {
           case 'executed':
-            transcription = billed.result;
+            if (billed.result.tooLong) {
+              logger.warn('voice_transcription_too_long', { companyId: voiceOrgId, userId: callerUserId, seconds: measuredSeconds, provider, charged_credits: billed.result.credits });
+              return res.status(413).json(audioTooLongChargedBody(measuredSeconds, billed.result.credits)); // transcript discarded
+            }
+            transcription = billed.result.t;
             break;
           case 'insufficient_credits':
             return res.status(402).json({ error: 'Not enough credits to transcribe.', code: 'INSUFFICIENT_CREDITS', required: billed.required, balance: billed.available });
