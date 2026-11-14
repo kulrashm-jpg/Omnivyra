@@ -1,4 +1,7 @@
 import { TENANT_SOURCE_COLUMNS, PLATFORM_ADMIN_SOURCE_COLUMNS } from '../../../backend/services/externalApi/sourceColumns';
+
+/** The stored fields a PUT reads (merge + SEC91-B2 whitelist reset). */
+const PUT_PREREAD_COLUMNS = 'id, company_id, api_key_env_name, api_key_name, auth_type, base_url, category, headers, is_preset, is_whitelisted, method, platform_type, query_params, rate_limit_per_min, retry_count, timeout_ms';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -167,7 +170,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // SEC91-B2: a tenant PUT is always compared with the stored row (see the whitelist
     // reset below), so the row is loaded whenever the caller lacks platform scope.
     if (!hasPlatformScope || !resolvedPlatformType || !auth_type || !api_key_name || !api_key_env_name || !method) {
-      let existingQuery = supabase.from('external_api_sources').select('*').eq('id', id);
+      // EXPLICIT columns (05, 2026-11-14): exactly the fields the merge / whitelist check below reads - never the
+      // encrypted OAuth pair, which this handler has no use for (fetched-but-unused secrets reach logs and errors).
+      let existingQuery = supabase.from('external_api_sources').select(PUT_PREREAD_COLUMNS).eq('id', id);
       if (!platformScopeGranted && companyId) existingQuery = existingQuery.eq('company_id', companyId);
       const { data: existing } = await existingQuery.single();
       existingRecord = existing;

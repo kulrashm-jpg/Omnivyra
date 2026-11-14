@@ -367,3 +367,13 @@ describe('presets GET, tenant branch', () => {
     expect(src).not.toMatch(/\.select\('\*'\)/);
   });
 });
+
+describe('[id].ts never selects * from external_api_sources (05, 2026-11-14)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const src: string = require('fs').readFileSync(require('path').resolve(__dirname, '../../../pages/api/external-apis/[id].ts'), 'utf8');
+  it('every external_api_sources statement uses an explicit column list (the PUT pre-read included)', () => {
+    const stmts = src.split(/\.from\('external_api_sources'\)/).slice(1).map((rest) => rest.slice(0, 160));
+    expect(stmts.length).toBeGreaterThanOrEqual(4); // positive control: GET, PUT pre-read, PUT update, DELETE
+    for (const s of stmts) expect(s).not.toMatch(/^\s*\.select\('\*'\)/);
+  });
+});
