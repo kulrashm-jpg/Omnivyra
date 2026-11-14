@@ -16,6 +16,9 @@ jest.mock('../../../components/CompanyContext', () => ({
 
 import ChatVoiceButton from '../../../components/ChatVoiceButton';
 import { VOICE_STATUS_URL } from '../../../hooks/useVoiceEnabled';
+import { insideWriteGate } from '../helpers/writeGateScan';
+import * as fs from 'fs';
+import * as path from 'path';
 
 type FetchReply = { ok: boolean; status: number; json: () => Promise<unknown> };
 function stubFetch(reply: FetchReply | 'reject') {
@@ -69,5 +72,15 @@ describe('voice switch: the mic appears only when the server says enabled', () =
     (global as unknown as { fetch: unknown }).fetch = jest.fn(() => new Promise(() => undefined));
     const { container } = renderButton();
     expect(container.innerHTML).toBe('');
+  });
+});
+
+describe('voice notes: only RECORDING needs the switch (55: saving a note makes no provider call)', () => {
+  const V = fs.readFileSync(path.join(process.cwd(), 'components/VoiceNotesComponent.tsx'), 'utf8');
+  it('Record needs the switch AND the role; Delete needs the role only', () => {
+    expect(V).toContain('const mayRecord = voiceEnabled && mayManageNotes;');
+    expect(insideWriteGate(V, 'onClick={startRecording}', 'mayRecord')).toBe(true);
+    expect(insideWriteGate(V, 'onClick={() => deleteVoiceNote(note.id)}', 'mayManageNotes')).toBe(true);
+    expect(insideWriteGate(V, 'onClick={() => deleteVoiceNote(note.id)}', 'mayRecord')).toBe(false);
   });
 });
