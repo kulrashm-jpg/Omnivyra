@@ -112,6 +112,11 @@ const PRIMITIVES = {
   requireContentTenantAccess: { from: /^backend\/security\/TenantGuard$/, level: 'tenant' },
   withTenantGuard: { from: /^backend\/security\/(TenantGuard|withTenantGuard)$/, level: 'tenant' },
   requireCampaignAccess: { from: /^backend\/services\/campaignAccessService$/, level: 'tenant', campaign: true },
+  // Creator plan-row routes (plan-row-oracle, 2026-11-11): authenticates FIRST (resolveUserContext, 401
+  // before any lookup), resolves the company from the row's campaign SERVER-SIDE, then enforceCompanyAccess
+  // on that company via a capturing response (a denial is the uniform 404). Same delegation as
+  // requireCompanyContext. REVIEW: a scanner-trust change (83 / 05).
+  loadAuthorizedPlanRow: { from: /^backend\/services\/creator\/rendering\/authorizedPlanRow$/, level: 'tenant' },
   requireCompanyAccess: { from: /^backend\/middleware\/authMiddleware$/, level: 'tenant' },
   // Delegates to enforceCompanyAccess and forwards campaignId (bound since ROUTE-AUTH-001).
   requireCompanyContext: { from: /^backend\/services\/companyContextGuardService$/, level: 'tenant', campaignArg: true },
