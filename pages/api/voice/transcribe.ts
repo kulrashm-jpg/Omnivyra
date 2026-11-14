@@ -148,7 +148,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             measuredSeconds = Number((t as any)?.duration) || 0;
             const tooLong = exceedsDurationLimit(measuredSeconds);
             const actual = creditsForSeconds(measuredSeconds, perMinute);
-            const credits = tooLong ? Math.min(voiceMaxCredits, actual) : actual;
+            // Capped on BOTH branches (05): the settle can never exceed the hold (VOICE max), whatever the per-minute rate -
+            // an uncapped normal settle above the hold would be refused and leave a legitimate transcription unbilled.
+            const credits = Math.min(voiceMaxCredits, actual);
             billingOpts.amountOverride = credits;
             return { t, tooLong, credits };
           },

@@ -36,7 +36,8 @@ jest.mock('../../services/billing/blackHoleCostCapture', () => ({ captureFlatPro
 // Billing seam for transcribe (dark by default: 'off' = the unbilled path every other case here uses).
 let mockEcMode: 'off' | 'enforce' = 'off';
 jest.mock('../../services/billing/creditEconomyActivation', () => ({ getCreditEconomyExecutionMode: async () => mockEcMode }));
-jest.mock('../../services/creditDeductionService', () => ({ ...jest.requireActual('../../services/creditDeductionService'), getCreditCost: async (a: string) => (a === 'voice_per_minute' ? 14 : 1) }));
+let mockVoiceRate = 14;
+jest.mock('../../services/creditDeductionService', () => ({ ...jest.requireActual('../../services/creditDeductionService'), getCreditCost: async (a: string) => (a === 'voice_per_minute' ? mockVoiceRate : 1) }));
 // A fake engine honouring the FIXED-path contract: run the executor, THEN read amountOverride; a throw = release.
 const mockEngine = { settled: [] as number[], released: 0 };
 jest.mock('../../services/creditExecutionService', () => ({
@@ -133,7 +134,7 @@ describe('voice/transcribe', () => {
       whisperSays(300);
       const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
       expect(r.status).toBe(200);
-      expect(mockEngine.settled).toEqual([70]);
+      expect(mockEngine.settled).toEqual([Math.min(VOICE_MAX, 70)]); // capped at the hold (60 today; 75 after e1)
     });
     it('a 30 s clip is charged by actual duration: ceil(0.5 x 14) = 7', async () => {
       whisperSays(30);
@@ -151,6 +152,18 @@ describe('voice/transcribe', () => {
       expect(r.body.transcription).toBeUndefined();
       expect(mockEngine.settled).toEqual([Math.min(VOICE_MAX, 71)]);
       expect(mockEngine.released).toBe(0);
+    });
+    it('05: a NORMAL (<=301 s) settle is capped too - at a rate where ceil(301 x rate / 60) > VOICE max it settles exactly the max (200)', async () => {
+      mockVoiceRate = 20; // ceil(301 x 20 / 60) = 101 > any VOICE max
+      try {
+        whisperSays(301);
+        const r = await invoke(transcribe, { method: 'POST', as: 'A', body: { ...audio, companyId: CO_A } });
+        expect(r.status).toBe(200);
+        expect(mockEngine.settled).toEqual([VOICE_MAX]);
+        expect(Math.ceil((301 * 20) / 60)).toBeGreaterThan(VOICE_MAX); // the control: uncapped it would exceed the hold
+      } finally {
+        mockVoiceRate = 14;
+      }
     });
     it('a 7-minute recording is charged at most the VOICE max', async () => {
       whisperSays(420); // ceil(420 x 14 / 60) = 98 > any VOICE max
